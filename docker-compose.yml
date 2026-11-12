@@ -1,0 +1,36 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${ORCAMENTO_SQL_SA_PASSWORD:?Configure ORCAMENTO_SQL_SA_PASSWORD no arquivo .env.}
+    ports:
+      - "14335:1433"
+    volumes:
+      - orcamento-pagamento-sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -C -Q \"SELECT 1\" || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P \"$${MSSQL_SA_PASSWORD}\" -Q \"SELECT 1\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: Server=sqlserver,1433;Database=OficinaMecanicaOrcamentoPagamento;User Id=sa;Password=${ORCAMENTO_SQL_SA_PASSWORD:?Configure ORCAMENTO_SQL_SA_PASSWORD no arquivo .env.};TrustServerCertificate=True;
+      Database__ApplyMigrationsOnStartup: "true"
+      Jwt__Secret: ${OFICINA_MECANICA_JWT_SECRET:?Configure OFICINA_MECANICA_JWT_SECRET no arquivo .env.}
+      DD_SERVICE: oficina-mecanica-orcamento-pagamento
+      DD_ENV: development
+    ports:
+      - "5095:8080"
+volumes:
+  orcamento-pagamento-sqlserver-data:
