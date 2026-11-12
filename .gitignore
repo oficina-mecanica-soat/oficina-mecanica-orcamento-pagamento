@@ -1,0 +1,30 @@
+bin/
+obj/
+.vs/
+.vscode/
+.sonarqube/
+TestResults/
+*.user
+*.suo
+*.nupkg
+.env
+.env.local
+*.env.local
+
+Material de apoio local.zip
+_material_apoio_extraido/
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.auto.tfvars
+*.auto.tfvars.json
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Contexto temporário da verificação de destroy de mensageria
+**/os-mensageria-destroy-context.json
