@@ -14,4 +14,5 @@ public static class OrcamentoErrorMessages
     public const string TransicaoInvalida = "Orçamento não permite esta alteração no estado atual.";
     public const string ResultadoDivergente = "Repetição do orçamento possui dados divergentes.";
     public const string OrcamentoNaoEncontrado = "Orçamento não encontrado.";
+    public const string VersaoCancelada = "Versão do orçamento já cancelada.";
 }

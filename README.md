@@ -16,7 +16,8 @@ Não existem referências de projeto, consultas SQL, entidades compartilhadas ou
 - A geração repetida com o mesmo snapshot e Saga retorna o orçamento existente. Conteúdo ou Saga divergentes para a mesma OS/versão retornam conflito.
 - Aprovação e recusa só ocorrem enquanto o orçamento aguarda aprovação. Repetir a mesma decisão não produz outro resultado. Cancelar preserva o snapshot e eventual decisão anterior; repetir o cancelamento exige o mesmo motivo.
 - Orçamento, contexto de integração e resultado na outbox são gravados na mesma transação SQL. `rowversion` protege alterações concorrentes; índices únicos impedem versões e resultados duplicados.
-- Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação e causação. **Ainda não são publicados no SQS.**
+- Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação, causação e traceparent validado. O publicador local mantém corpo/ID após falhas e usa lease e backoff. **Ainda não há adaptador ou consumo SQS ativo.**
+- O processador de comandos confirma recebimento, efeito e outbox em uma transação SQL. Reentregas compatíveis não duplicam efeitos; mesma identidade com conteúdo divergente é rejeitada. Cancelamento anterior à geração deixa um registro persistente que impede reabrir aquela versão, inclusive pelo caso de uso HTTP.
 
 O contexto da Saga é metadado de persistência/integração, sem dependência tecnológica no Domain. O total usa `decimal(18,2)`; valores inválidos, duplicatas e totais que excedam esse limite são rejeitados antes da persistência.
 
@@ -101,6 +102,10 @@ Os testes de integração exigem Docker e criam SQL Server descartável com Test
 
 ## Limites deste incremento
 
-F4-07 permanece em andamento. Estão pendentes: consumo SQS com inbox/idempotência de transporte e cancelamento recebido antes da geração; publicação e recuperação da outbox; ligação com a Saga de OS; CI/CD e governança do novo repositório derivados das esteiras existentes; SQL/usuário isolados no RDS, fila/DLQ e integração Kubernetes/Gateway. A instrumentação nativa do Datadog precisa acompanhar o futuro deploy.
+O serviço permanece em andamento. O núcleo de mensagens já processa geração/cancelamento e grava recebimentos, inclusive cancelamento antecipado; a ligação local com a Saga foi validada por JSON e bancos separados. Os testes também verificam falha após envio, retomada e publicadores concorrentes.
+
+Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local, derivado da referência do Execução, que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. Não existe worker automático habilitado no host, nem configuração que acione AWS neste incremento. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa.
+
+Estão pendentes: adaptador/worker SQS e validação de FIFO/DLQ/visibilidade/IAM; ativação do fluxo nas rotas de OS e corte do ownership; CI/CD e governança do novo repositório derivados das esteiras existentes; SQL/usuário isolados no RDS, fila/DLQ e integração Kubernetes/Gateway. O publicador local conserva a ordem global das pendências e só pode ter sua concorrência/política de falha ampliada com os testes do transporte real. A instrumentação nativa do Datadog precisa acompanhar o futuro deploy.
 
 F4-08 ainda requer checkout Mercado Pago em teste, notificação verificada, consulta ao provedor e confirmação financeira idempotente. Nenhum endpoint deste incremento confirma pagamento ou autoriza entrega de OS. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.

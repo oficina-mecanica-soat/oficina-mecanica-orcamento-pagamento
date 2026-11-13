@@ -13,6 +13,10 @@ public sealed class RegistroOutbox
     public string Corpo { get; private set; }
     public DateTimeOffset CriadoEm { get; private set; }
     public DateTimeOffset? PublicadoEm { get; private set; }
+    public Guid? Responsavel { get; private set; }
+    public DateTimeOffset? LeaseAte { get; private set; }
+    public int Tentativas { get; private set; }
+    public DateTimeOffset? ProximaTentativaEm { get; private set; }
 
     public static RegistroOutbox Criar(MensagemIntegracao mensagem, int versaoNegocio)
     {

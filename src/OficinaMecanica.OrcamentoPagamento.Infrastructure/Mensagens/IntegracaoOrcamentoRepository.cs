@@ -17,12 +17,21 @@ public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoReposito
         entry.Property<Guid>("SagaId").CurrentValue = contexto.SagaId;
         entry.Property<Guid>("MensagemOrigemId").CurrentValue = contexto.MensagemId;
         entry.Property<string>("CorrelationId").CurrentValue = contexto.CorrelationId;
+        entry.Property<string?>("TraceContext").CurrentValue = contexto.TraceContext is null ? null : JsonContrato.Serializar(ContextoTrace.Filtrar(contexto.TraceContext));
     }
 
-    public Task<ContextoIntegracao> ObterContextoAsync(Guid orcamentoId, CancellationToken cancellationToken = default) =>
-        _dbContext.Orcamentos.Where(o => o.Id == orcamentoId)
-            .Select(o => new ContextoIntegracao(EF.Property<Guid>(o, "SagaId"), EF.Property<string>(o, "CorrelationId"),
-                EF.Property<Guid>(o, "MensagemOrigemId"))).SingleAsync(cancellationToken);
+    public async Task<ContextoIntegracao> ObterContextoAsync(Guid orcamentoId, CancellationToken cancellationToken = default)
+    {
+        var contexto = await _dbContext.Orcamentos.Where(o => o.Id == orcamentoId).Select(o => new
+        {
+            SagaId = EF.Property<Guid>(o, "SagaId"),
+            CorrelationId = EF.Property<string>(o, "CorrelationId"),
+            MensagemId = EF.Property<Guid>(o, "MensagemOrigemId"),
+            TraceContext = EF.Property<string?>(o, "TraceContext")
+        }).SingleAsync(cancellationToken);
+        return new(contexto.SagaId, contexto.CorrelationId, contexto.MensagemId,
+            contexto.TraceContext is null ? null : ContextoTrace.Filtrar(JsonContrato.Ler<Dictionary<string, string>>(contexto.TraceContext)));
+    }
 
     public async Task AdicionarResultadoAsync(MensagemIntegracao mensagem, int versaoNegocio, CancellationToken cancellationToken = default)
     {

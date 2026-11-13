@@ -23,6 +23,8 @@ public static class DependencyInjection
         services.AddScoped<IOrcamentoRepository, OrcamentoRepository>();
         services.AddScoped<IIntegracaoOrcamentoRepository, IntegracaoOrcamentoRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
+        services.AddScoped<IRecebimentoMensagemRepository, RecebimentoMensagemRepository>();
+        services.AddScoped<ICancelamentoMensagemRepository, CancelamentoMensagemRepository>();
         return services;
     }
 }

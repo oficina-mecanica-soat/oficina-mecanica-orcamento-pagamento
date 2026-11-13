@@ -22,6 +22,27 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Application.Mensagens.CancelamentoRecebido", b =>
+                {
+                    b.Property<Guid>("OrdemServicoId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Versao")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Motivo")
+                        .IsRequired()
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<Guid>("SagaId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("OrdemServicoId", "Versao");
+
+                    b.ToTable("CancelamentosRecebidos", "OrcamentoPagamento");
+                });
+
             modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Aggregates.Orcamento", b =>
                 {
                     b.Property<Guid>("Id")
@@ -58,6 +79,9 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("int");
 
+                    b.Property<string>("TraceContext")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<decimal>("ValorTotal")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
@@ -73,6 +97,28 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
                     b.ToTable("Orcamentos", "OrcamentoPagamento");
                 });
 
+            modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens.RecebimentoMensagem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ChaveOperacao")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Hash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChaveOperacao");
+
+                    b.ToTable("RecebimentosMensagem", "OrcamentoPagamento");
+                });
+
             modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens.RegistroOutbox", b =>
                 {
                     b.Property<Guid>("Id")
@@ -85,11 +131,23 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
                     b.Property<DateTimeOffset>("CriadoEm")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<DateTimeOffset?>("LeaseAte")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<Guid>("OrdemServicoId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset?>("ProximaTentativaEm")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<DateTimeOffset?>("PublicadoEm")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("Responsavel")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Tentativas")
+                        .HasColumnType("int");
 
                     b.Property<string>("Tipo")
                         .IsRequired()

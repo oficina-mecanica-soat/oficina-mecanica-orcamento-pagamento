@@ -20,10 +20,11 @@ public sealed class GerarOrcamentoUseCase
     private readonly IMapper _mapper;
     private readonly TimeProvider _relogio;
     private readonly ILogger<GerarOrcamentoUseCase> _logger;
+    private readonly ICancelamentoMensagemRepository _cancelamentos;
 
     public GerarOrcamentoUseCase(IOrcamentoRepository orcamentoRepository, IIntegracaoOrcamentoRepository integracaoRepository,
         IUnitOfWork unitOfWork, IValidator<GerarOrcamentoRequest> validator, IMapper mapper,
-        TimeProvider relogio, ILogger<GerarOrcamentoUseCase> logger)
+        TimeProvider relogio, ILogger<GerarOrcamentoUseCase> logger, ICancelamentoMensagemRepository cancelamentos)
     {
         _orcamentoRepository = orcamentoRepository;
         _integracaoRepository = integracaoRepository;
@@ -32,6 +33,7 @@ public sealed class GerarOrcamentoUseCase
         _mapper = mapper;
         _relogio = relogio;
         _logger = logger;
+        _cancelamentos = cancelamentos;
     }
     public async Task<Result<OrcamentoResponse>> ExecuteAsync(GerarOrcamentoRequest request, CancellationToken cancellationToken = default)
     {
@@ -41,6 +43,10 @@ public sealed class GerarOrcamentoUseCase
             return Result<OrcamentoResponse>.Falha(validacao.ObterMensagensErro(), TipoErro.Validacao);
         }
 
+        if (await _cancelamentos.ObterAsync(request.OrdemServicoId, request.Versao, cancellationToken) is not null)
+        {
+            return Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.VersaoCancelada, TipoErro.RegraNegocio);
+        }
         var novo = Orcamento.Gerar(request.OrdemServicoId, request.ClienteId, request.Versao,
             request.Servicos.Select(s => ServicoOrcamento.Criar(s.ServicoId, s.ServicoCatalogoId, s.Descricao, s.Valor)).ToArray(),
             request.PecasInsumos.Select(p => PecaInsumoOrcamento.Criar(p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario)).ToArray());
@@ -53,12 +59,23 @@ public sealed class GerarOrcamentoUseCase
                 : Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.ResultadoDivergente, TipoErro.Conflito);
         }
 
+        var cancelada = false;
         await _unitOfWork.ExecutarEmTransacaoAsync(async ct =>
         {
+            // A mesma guarda dentro da transação impede a corrida com cancelamento antecipado.
+            if (await _cancelamentos.ObterAsync(request.OrdemServicoId, request.Versao, ct) is not null)
+            {
+                cancelada = true;
+                return;
+            }
             await _orcamentoRepository.AdicionarAsync(novo, ct);
             await _integracaoRepository.RegistrarContextoAsync(novo.Id, request.Contexto, ct);
             await _integracaoRepository.AdicionarResultadoAsync(ResultadosOrcamento.Gerado(novo, request.Contexto, _relogio), novo.Versao, ct);
         }, cancellationToken);
+        if (cancelada)
+        {
+            return Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.VersaoCancelada, TipoErro.RegraNegocio);
+        }
         _logger.LogInformation("Orçamento {OrcamentoId} gerado para a OS {OrdemServicoId}, versão {Versao}. {operation} {bounded_context}", novo.Id, novo.OrdemServicoId, novo.Versao, "GerarOrcamento", "Orcamentos");
         return Result<OrcamentoResponse>.Ok(_mapper.Map<OrcamentoResponse>(novo));
     }

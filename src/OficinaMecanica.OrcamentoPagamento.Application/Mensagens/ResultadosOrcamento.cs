@@ -22,5 +22,6 @@ public static class ResultadosOrcamento
 
     private static MensagemIntegracao Criar<T>(string tipo, Orcamento orcamento, ContextoIntegracao contexto, T dados, TimeProvider relogio) =>
         new(Guid.CreateVersion7(), tipo, 1, contexto.SagaId, orcamento.OrdemServicoId, contexto.CorrelationId,
-            contexto.MensagemId, relogio.GetUtcNow(), JsonSerializer.SerializeToElement(dados, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            contexto.MensagemId, relogio.GetUtcNow(), JsonSerializer.SerializeToElement(dados, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            ContextoTrace.Filtrar(contexto.TraceContext));
 }

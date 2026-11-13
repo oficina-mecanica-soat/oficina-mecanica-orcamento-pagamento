@@ -20,6 +20,7 @@ public sealed class OrcamentoConfiguration : IEntityTypeConfiguration<Orcamento>
         builder.Property<Guid>("SagaId").IsRequired();
         builder.Property<Guid>("MensagemOrigemId").IsRequired();
         builder.Property<string>("CorrelationId").IsRequired();
+        builder.Property<string>("TraceContext");
         builder.HasIndex(o => new { o.OrdemServicoId, o.Versao }).IsUnique();
         builder.OwnsMany(o => o.Servicos, servico =>
         {

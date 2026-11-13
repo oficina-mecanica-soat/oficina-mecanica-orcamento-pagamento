@@ -15,6 +15,35 @@ namespace OficinaMecanica.OrcamentoPagamento.Application.UnitTests.Orcamentos;
 
 public sealed class OrcamentoUseCasesTests
 {
+    [Fact]
+    public async Task Dado_CancelamentoEntreConsultaETransacao_Quando_Gerar_Entao_NaoDevePersistirVersaoCancelada()
+    {
+        // Arrange
+        var dados = new OrcamentoUseCaseTestDataFactory();
+        dados.Cancelamentos.SetupSequence(r => r.ObterAsync(dados.Request.OrdemServicoId, dados.Request.Versao, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CancelamentoRecebido?)null)
+            .ReturnsAsync(new CancelamentoRecebido(dados.Request.OrdemServicoId, dados.Request.Versao, dados.Request.Contexto.SagaId, "Cancelamento"));
+        // Act
+        var resultado = await dados.CriarGerarUseCase().ExecuteAsync(dados.Request);
+        // Assert
+        resultado.Sucesso.Should().BeFalse();
+        resultado.Erro!.Tipo.Should().Be(TipoErro.RegraNegocio);
+        dados.Repository.Verify(r => r.AdicionarAsync(It.IsAny<Domain.Orcamentos.Aggregates.Orcamento>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+    [Fact]
+    public async Task Dado_CancelamentoAntecipado_Quando_GerarPorOutroPontoDeEntrada_Entao_NaoDeveReabrirVersao()
+    {
+        // Arrange
+        var dados = new OrcamentoUseCaseTestDataFactory();
+        dados.Cancelamentos.Setup(r => r.ObterAsync(dados.Request.OrdemServicoId, dados.Request.Versao, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CancelamentoRecebido(dados.Request.OrdemServicoId, dados.Request.Versao, dados.Request.Contexto.SagaId, "Cancelamento"));
+        // Act
+        var resultado = await dados.CriarGerarUseCase().ExecuteAsync(dados.Request);
+        // Assert
+        resultado.Sucesso.Should().BeFalse();
+        resultado.Erro!.Tipo.Should().Be(TipoErro.RegraNegocio);
+        dados.Repository.Verify(r => r.AdicionarAsync(It.IsAny<Domain.Orcamentos.Aggregates.Orcamento>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
     [Theory]
     [InlineData(0)]
     [InlineData(161)]
