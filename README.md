@@ -91,6 +91,10 @@ Decisão: `{"versao":1,"decisao":1,"operacaoId":"88888888-8888-8888-8888-8888888
 
 ## Validar
 
+A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
+
+Neste bootstrap não existem jobs de Kubernetes/Terraform ou CD: os respectivos recursos ainda não foram implementados. Esses jobs e as promoções devem ser derivados das esteiras maduras quando essa frente estiver pronta; não usar um workflow vazio ou um job sempre verde como substituto de deploy. Não há publicação de imagem em registry, operação AWS ou merge automático nesta CI.
+
 ```powershell
 dotnet restore OficinaMecanica.OrcamentoPagamento.sln
 dotnet build OficinaMecanica.OrcamentoPagamento.sln --configuration Release --no-restore
