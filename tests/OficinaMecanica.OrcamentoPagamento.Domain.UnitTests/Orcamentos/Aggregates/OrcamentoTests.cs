@@ -11,6 +11,27 @@ namespace OficinaMecanica.OrcamentoPagamento.Domain.UnitTests.Orcamentos.Aggrega
 public sealed class OrcamentoTests
 {
     [Fact]
+    public void Dado_MesmaPecaEmLinhasDistintas_Quando_Gerar_Entao_DevePreservarQuantidadesEPrecosSemMedia()
+    {
+        // Arrange
+        var itemId = Guid.NewGuid();
+        var ordemId = Guid.NewGuid();
+        var clienteId = Guid.NewGuid();
+        var servico = ServicoOrcamento.Criar(Guid.NewGuid(), Guid.NewGuid(), "Serviço", 150m);
+        var primeira = PecaInsumoOrcamento.Criar(itemId, "Peça", 2, 45m);
+        var segunda = PecaInsumoOrcamento.Criar(itemId, "Peça", 1, 50m);
+        // Act
+        var original = Orcamento.Gerar(ordemId, clienteId, 1, [servico], [primeira, segunda]);
+        var repetido = Orcamento.Gerar(ordemId, clienteId, 1, [servico], [segunda, primeira]);
+        var iguais = Orcamento.Gerar(ordemId, clienteId, 2, [servico], [primeira, primeira]);
+        // Assert
+        original.ValorTotal.Should().Be(290m);
+        original.PecasInsumos.Should().HaveCount(2);
+        original.PossuiMesmoSnapshot(repetido).Should().BeTrue();
+        iguais.ValorTotal.Should().Be(330m);
+        iguais.PecasInsumos.First().Should().NotBeSameAs(iguais.PecasInsumos.Last());
+    }
+    [Fact]
     public void Dado_SnapshotValido_Quando_Gerar_Entao_DeveCalcularTotalEPreservarIdentidades()
     {
         // Arrange
@@ -137,7 +158,6 @@ public sealed class OrcamentoTests
     {
         // Arrange
         var servico = ServicoOrcamento.Criar(Guid.NewGuid(), Guid.NewGuid(), "Serviço", 1m);
-        var peca = PecaInsumoOrcamento.Criar(Guid.NewGuid(), "Peça", 1, 1m);
         Action[] invalidos =
         [
             () => Orcamento.Gerar(Guid.Empty, Guid.NewGuid(), 1, [servico], []),
@@ -148,7 +168,6 @@ public sealed class OrcamentoTests
             () => Orcamento.Gerar(Guid.NewGuid(), Guid.NewGuid(), 1, [null!], []),
             () => Orcamento.Gerar(Guid.NewGuid(), Guid.NewGuid(), 1, [servico], [null!]),
             () => Orcamento.Gerar(Guid.NewGuid(), Guid.NewGuid(), 1, [servico, servico], []),
-            () => Orcamento.Gerar(Guid.NewGuid(), Guid.NewGuid(), 1, [servico], [peca, peca]),
             () => Orcamento.Gerar(Guid.NewGuid(), Guid.NewGuid(), 1,
                 [ServicoOrcamento.Criar(Guid.NewGuid(), Guid.NewGuid(), "Máximo", RegrasSnapshot.ValorMaximo), servico], [])
         ];

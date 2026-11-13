@@ -39,8 +39,7 @@ public sealed class Orcamento
         {
             throw new DomainException(OrcamentoErrorMessages.ServicosObrigatorios);
         }
-        if (servicos.Select(s => s.ServicoId).Distinct().Count() != servicos.Count
-            || pecasInsumos.Select(p => p.PecaInsumoCatalogoId).Distinct().Count() != pecasInsumos.Count)
+        if (servicos.Select(s => s.ServicoId).Distinct().Count() != servicos.Count)
             throw new DomainException(OrcamentoErrorMessages.ReferenciasDuplicadas);
 
         decimal total = 0;
@@ -63,7 +62,8 @@ public sealed class Orcamento
             ValorTotal = total
         };
         orcamento._servicos.AddRange(servicos.OrderBy(s => s.ServicoId));
-        orcamento._pecasInsumos.AddRange(pecasInsumos.OrderBy(p => p.PecaInsumoCatalogoId));
+        orcamento._pecasInsumos.AddRange(OrdenarPecas(pecasInsumos).Select(p =>
+            PecaInsumoOrcamento.Criar(p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario)));
         return orcamento;
     }
 
@@ -72,9 +72,13 @@ public sealed class Orcamento
         return OrdemServicoId == outro.OrdemServicoId && ClienteId == outro.ClienteId && Versao == outro.Versao
             && _servicos.Select(s => (s.ServicoId, s.ServicoCatalogoId, s.Descricao, s.Valor))
                 .SequenceEqual(outro._servicos.Select(s => (s.ServicoId, s.ServicoCatalogoId, s.Descricao, s.Valor)))
-            && _pecasInsumos.Select(p => (p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario))
-                .SequenceEqual(outro._pecasInsumos.Select(p => (p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario)));
+            && OrdenarPecas(_pecasInsumos).Select(p => (p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario))
+                .SequenceEqual(OrdenarPecas(outro._pecasInsumos).Select(p => (p.PecaInsumoCatalogoId, p.Descricao, p.Quantidade, p.ValorUnitario)));
     }
+
+    private static IOrderedEnumerable<PecaInsumoOrcamento> OrdenarPecas(IEnumerable<PecaInsumoOrcamento> pecas) =>
+        pecas.OrderBy(p => p.PecaInsumoCatalogoId).ThenBy(p => p.Descricao, StringComparer.Ordinal)
+            .ThenBy(p => p.ValorUnitario).ThenBy(p => p.Quantidade);
 
     public bool RegistrarDecisao(int versao, DecisaoOrcamento decisao)
     {

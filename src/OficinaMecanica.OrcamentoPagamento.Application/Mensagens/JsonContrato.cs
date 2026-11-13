@@ -2,10 +2,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 namespace OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
 
 public static class JsonContrato
 {
+    private static readonly JsonSerializerOptions OpcoesHash = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new DecimalNormalizadoConverter() }
+    };
     public static JsonSerializerOptions Options { get; } = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false,
@@ -32,12 +37,19 @@ public static class JsonContrato
         return mensagem with { TraceContext = ContextoTrace.Filtrar(mensagem.TraceContext) };
     }
     public static string Hash<T>(MensagemIntegracao mensagem, T dados) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Serializar(new
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
         {
             mensagem.Tipo,
             mensagem.SagaId,
             mensagem.OrdemServicoId,
             mensagem.CorrelationId,
             Dados = dados
-        }))));
+        }, OpcoesHash))));
+
+    private sealed class DecimalNormalizadoConverter : JsonConverter<decimal>
+    {
+        public override decimal Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) => reader.GetDecimal();
+        public override void Write(Utf8JsonWriter writer, decimal value, JsonSerializerOptions options) =>
+            writer.WriteRawValue(value.ToString("G29", CultureInfo.InvariantCulture));
+    }
 }

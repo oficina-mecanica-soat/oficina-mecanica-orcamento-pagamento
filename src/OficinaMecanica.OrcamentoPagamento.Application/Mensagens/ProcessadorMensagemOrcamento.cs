@@ -33,7 +33,7 @@ public sealed class ProcessadorMensagemOrcamento
             {
                 var request = CriarRequest(mensagem, gerar);
                 if (!(await new GerarOrcamentoValidator().ValidateAsync(request, ct)).IsValid) { throw new ContratoMensagemException("DADOS_INVALIDOS"); }
-                gerar = gerar with { Servicos = gerar.Servicos.OrderBy(s => s.ServicoId).ToArray(), Itens = gerar.Itens.OrderBy(i => i.ItemId).ToArray() };
+                gerar = gerar with { Servicos = gerar.Servicos.OrderBy(s => s.ServicoId).ToArray(), Itens = gerar.Itens.OrderBy(i => i.ItemId).ThenBy(i => i.Descricao, StringComparer.Ordinal).ThenBy(i => i.ValorUnitario).ThenBy(i => i.Quantidade).ToArray() };
                 versao = gerar.Versao; dados = gerar;
             }
             else

@@ -19,6 +19,28 @@ namespace OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Orcamentos.Sce
 [Collection(OrcamentoPagamentoApiCollection.Nome)]
 public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
 {
+    [Fact]
+    public async Task Dado_PecaRepetidaComPrecosDistintos_Quando_PersistirEReentregar_Entao_DeveManterTodasAsLinhas()
+    {
+        // Arrange
+        var request = OrcamentoRequestBuilder.Novo();
+        var primeira = request.PecasInsumos.Single();
+        request = request with { PecasInsumos = [primeira, primeira with { Quantidade = 1, ValorUnitario = 50m }] };
+        var client = _fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TokenTestDataFactory.Criar("Administrador"));
+        // Act
+        var resposta = await client.PostAsJsonAsync("/api/v1/orcamentos", request);
+        var repetida = await client.PostAsJsonAsync("/api/v1/orcamentos", request with { PecasInsumos = request.PecasInsumos.Reverse().ToArray() });
+        // Assert
+        resposta.StatusCode.Should().Be(System.Net.HttpStatusCode.Created);
+        repetida.StatusCode.Should().Be(System.Net.HttpStatusCode.Created);
+        await using var contexto = _fixture.CriarDbContext();
+        var orcamento = await contexto.Orcamentos.Include(o => o.PecasInsumos).SingleAsync();
+        orcamento.ValorTotal.Should().Be(290m);
+        orcamento.PecasInsumos.Should().HaveCount(2);
+        orcamento.PecasInsumos.Select(p => p.ValorUnitario).Should().BeEquivalentTo([45m, 50m]);
+        (await contexto.Outbox.CountAsync()).Should().Be(1);
+    }
     private readonly OrcamentoPagamentoApiFixture _fixture;
     public OrcamentoPersistenciaTests(OrcamentoPagamentoApiFixture fixture) { _fixture = fixture; }
     public Task InitializeAsync() => _fixture.ResetarBancoAsync();

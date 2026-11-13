@@ -8,7 +8,7 @@ public static class OrcamentoErrorMessages
     public const string ValorInvalido = "Valor deve ser positivo e representável com precisão SQL 18,2.";
     public const string QuantidadeInvalida = "Quantidade deve ser maior que zero.";
     public const string ServicosObrigatorios = "Orçamento deve possuir ao menos um serviço.";
-    public const string ReferenciasDuplicadas = "Snapshot não pode conter referências duplicadas.";
+    public const string ReferenciasDuplicadas = "Snapshot não pode repetir o identificador de uma instância de serviço.";
     public const string ColecaoInvalida = "Coleção do snapshot não pode ser nula ou conter elementos nulos.";
     public const string DecisaoInvalida = "Decisão do orçamento inválida.";
     public const string TransicaoInvalida = "Orçamento não permite esta alteração no estado atual.";

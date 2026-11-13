@@ -5,6 +5,15 @@ namespace OficinaMecanica.OrcamentoPagamento.Application.UnitTests.Mensagens;
 
 public sealed class ContratoMensagemTests
 {
+    [Fact]
+    public void Dado_ValorMonetarioComOutraEscala_Quando_CalcularIdentidade_Entao_DevePreservarMesmoHash()
+    {
+        // Arrange
+        var mensagem = Valida();
+        // Act / Assert
+        JsonContrato.Hash(mensagem, new { valor = 45m }).Should().Be(JsonContrato.Hash(mensagem, new { valor = 45.00m }));
+        JsonContrato.Hash(mensagem, new { valor = 45m }).Should().NotBe(JsonContrato.Hash(mensagem, new { valor = 45.01m }));
+    }
     private static MensagemIntegracao Valida() => new(Guid.NewGuid(), "GerarOrcamento", 1, Guid.NewGuid(), Guid.NewGuid(), "correlacao",
         Guid.NewGuid(), DateTimeOffset.UtcNow, JsonSerializer.SerializeToElement(new { versao = 1 }));
     [Theory]

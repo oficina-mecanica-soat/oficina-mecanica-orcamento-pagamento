@@ -35,7 +35,8 @@ public sealed class OrcamentoConfiguration : IEntityTypeConfiguration<Orcamento>
         {
             peca.ToTable("PecasInsumosOrcamento", "OrcamentoPagamento");
             peca.WithOwner().HasForeignKey("OrcamentoId");
-            peca.HasKey("OrcamentoId", nameof(Domain.Orcamentos.Entities.PecaInsumoOrcamento.PecaInsumoCatalogoId));
+            peca.Property<int>("Id").ValueGeneratedOnAdd();
+            peca.HasKey("OrcamentoId", "Id");
             peca.Property(p => p.PecaInsumoCatalogoId).ValueGeneratedNever();
             peca.Property(p => p.Descricao).HasMaxLength(RegrasSnapshot.DescricaoMaxima).IsRequired();
             peca.Property(p => p.ValorUnitario).HasPrecision(18, 2);

@@ -1,6 +1,6 @@
 # Orçamento/Pagamento — Oficina Mecânica
 
-Serviço responsável por orçamentos versionados e, na evolução prevista, cobrança. Este primeiro incremento funciona **localmente**: gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio. Não houve publicação no GitHub nem implantação AWS.
+Serviço responsável por orçamentos versionados e, na evolução prevista, cobrança. A implementação em revisão gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio. O código é disponibilizado por PR para `develop`; não houve implantação AWS.
 
 ## Arquitetura e referências
 
@@ -12,14 +12,14 @@ Não existem referências de projeto, consultas SQL, entidades compartilhadas ou
 
 ## Comportamento implementado
 
-- Cada orçamento pertence a uma OS, um cliente e uma versão. Serviços e peças mantêm identificadores, descrições, quantidades e preços congelados; uma nova versão não altera a anterior.
+- Cada orçamento pertence a uma OS, um cliente e uma versão. Serviços e peças mantêm identificadores, descrições, quantidades e preços congelados; uma nova versão não altera a anterior. A mesma peça pode aparecer em linhas com preços distintos, preservando os lançamentos da OS sem média ou agrupamento. A chave técnica dessas linhas fica somente na persistência.
 - A geração repetida com o mesmo snapshot e Saga retorna o orçamento existente. Conteúdo ou Saga divergentes para a mesma OS/versão retornam conflito.
 - Aprovação e recusa só ocorrem enquanto o orçamento aguarda aprovação. Repetir a mesma decisão não produz outro resultado. Cancelar preserva o snapshot e eventual decisão anterior; repetir o cancelamento exige o mesmo motivo.
 - Orçamento, contexto de integração e resultado na outbox são gravados na mesma transação SQL. `rowversion` protege alterações concorrentes; índices únicos impedem versões e resultados duplicados.
 - Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação, causação e traceparent validado. O publicador local mantém corpo/ID após falhas e usa lease e backoff. **Ainda não há adaptador ou consumo SQS ativo.**
 - O processador de comandos confirma recebimento, efeito e outbox em uma transação SQL. Reentregas compatíveis não duplicam efeitos; mesma identidade com conteúdo divergente é rejeitada. Cancelamento anterior à geração deixa um registro persistente que impede reabrir aquela versão, inclusive pelo caso de uso HTTP.
 
-O contexto da Saga é metadado de persistência/integração, sem dependência tecnológica no Domain. O total usa `decimal(18,2)`; valores inválidos, duplicatas e totais que excedam esse limite são rejeitados antes da persistência.
+O contexto da Saga é metadado de persistência/integração, sem dependência tecnológica no Domain. O total usa `decimal(18,2)`; valores inválidos, identificadores de serviço repetidos e totais que excedam esse limite são rejeitados antes da persistência.
 
 ## Executar localmente
 
