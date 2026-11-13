@@ -1,11 +1,12 @@
 # Instruções do repositório
 
 - Antes de alterar, examine o estado Git e o código relacionado. As decisões canônicas estão no repositório irmão `oficina-mecanica-api`, em `docs/architecture/adrs`, `docs/architecture/rfcs` e `docs/projeto/backlog-tecnico.md`; consulte também os links do README. Preserve alterações existentes.
-- Para trabalho transversal ao projeto, leia `.agents/skills/oficina-mecanica/SKILL.md` antes de implementar. Ela complementa estas instruções e não substitui os documentos de arquitetura.
+- Para trabalho transversal ao projeto, leia `../oficina-mecanica-api/.agents/skills/oficina-mecanica/SKILL.md` antes de implementar. Ela complementa estas instruções e não substitui os documentos de arquitetura.
 - Preserve DDD, linguagem ubíqua, Clean Architecture, use cases e contratos existentes. Antes de extrair um serviço, identifique regras, testes, dados e consumidores; não presuma que a migração já ocorreu.
 - Use português para conceitos do domínio e inglês para convenções técnicas consolidadas. Identificadores C# seguem o padrão existente sem acentos; mensagens, logs, documentação e PRs devem usar português brasileiro correto, com acentos e UTF-8.
 - Aplique SOLID, Clean Code, KISS e DRY com julgamento: responsabilidades claras, testes úteis e sem abstrações antecipadas. Não renomeie contratos existentes sem avaliar consumidores.
 - Para CI/CD, compare a alteração com os workflows maduros da API, VPC e Kubernetes; preserve Git Flow, quality gates, promoções, environments e guardrails. Não enfraqueça proteções para facilitar entrega.
+- Todo deploy ou alteração de recursos reais deve ocorrer exclusivamente pela esteira CI/CD oficial. Nunca use AWS CLI, Terraform local, `kubectl apply`, console, SDK ou script como atalho. Fora da esteira, essas ferramentas são somente read-only; exceção de escrita exige pedido explícito para a operação específica, justificativa de emergência/recuperação e confirmação de que não é um deploy normal.
 - Execute validações proporcionais e informe resultados reais. Não exponha credenciais, secrets ou dados sensíveis. Operações reais de infraestrutura e alterações destrutivas exigem autorização específica.
 - Para alterações .NET, consulte o README e valide com `dotnet restore OficinaMecanica.OrcamentoPagamento.sln`, `dotnet build OficinaMecanica.OrcamentoPagamento.sln --no-restore` e testes pertinentes; use `dotnet format OficinaMecanica.OrcamentoPagamento.sln --verify-no-changes --no-restore` quando aplicável. Para Terraform, consulte os workflows e valide formatação e configuração sem executar deploy.
 
@@ -20,7 +21,6 @@
 ## Aplicação do fluxo de trabalho
 
 - Antes de editar, identificar a raiz do repositório, ler estas regras e o procedimento canônico da skill. Se a sessão começou em um diretório externo, não presumir que uma mudança de diretório em ferramenta carregou as instruções automaticamente.
-- O procedimento canônico fica em `oficina-mecanica-api/.agents/skills/oficina-mecanica/SKILL.md`; no Execução, a skill local apenas encaminha para essa fonte. Não manter cópias divergentes do procedimento nem instalar configuração local sem tarefa explícita para isso.
+- O procedimento canônico fica em `oficina-mecanica-api/.agents/skills/oficina-mecanica/SKILL.md`; neste repositório, consulte diretamente essa fonte canônica no clone irmão. Não manter cópias divergentes do procedimento nem instalar configuração local sem tarefa explícita para isso.
 - Antes de publicar qualquer PR, revisar o diff e os caminhos adicionados, executar o gate de estrutura do CI e informar validações realmente observadas. Preservar o gate; não adaptar o bloqueio para permitir uma estrutura não alinhada.
 - Com ajustes autorizados prontos, abrir o PR e informar comportamento, reaproveitamento, contratos, implantação prevista, testes e pendências. Gabriel realiza o merge. Aprovação de código não autoriza apply/deploy/destroy: manter AWS bloqueada até janela explicitamente autorizada.
-
