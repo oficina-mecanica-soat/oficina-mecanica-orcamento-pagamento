@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using AutoMapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -18,7 +19,10 @@ internal sealed class OrcamentoUseCaseTestDataFactory
     public Mock<IUnitOfWork> UnitOfWork { get; } = new();
     public Mock<IMapper> Mapper { get; } = new();
     public Mock<ICancelamentoMensagemRepository> Cancelamentos { get; } = new();
-    public GerarOrcamentoRequest Request { get; } = new(Guid.NewGuid(), Guid.NewGuid(), 1,
+    public GerarOrcamentoRequest Request
+    {
+        get;
+    } = new(Guid.NewGuid(), Guid.NewGuid(), 1,
         new(Guid.NewGuid(), "correlacao-teste", Guid.NewGuid()),
         [new(Guid.NewGuid(), Guid.NewGuid(), "Serviço", 150m)], [new(Guid.NewGuid(), "Peça", 2, 45m)]);
 

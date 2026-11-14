@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using Microsoft.Extensions.Logging;
 using AutoMapper;
 using FluentValidation;
@@ -51,7 +52,10 @@ public sealed class RegistrarDecisaoOrcamentoUseCase
             {
                 await _orcamentoRepository.AtualizarAsync(orcamento, ct);
                 await _integracaoRepository.AdicionarResultadoAsync(
-                    ResultadosOrcamento.Decidido(orcamento, contexto with { MensagemId = request.OperacaoId }, _relogio), orcamento.Versao, ct);
+                    ResultadosOrcamento.Decidido(orcamento, contexto with
+                    {
+                        MensagemId = request.OperacaoId
+                    }, _relogio), orcamento.Versao, ct);
             }, cancellationToken);
             _logger.LogInformation("Orçamento {OrcamentoId} atualizado para {Status}. {operation} {bounded_context}",
                 orcamento.Id, orcamento.Status, "RegistrarDecisaoOrcamento", "Orcamentos");

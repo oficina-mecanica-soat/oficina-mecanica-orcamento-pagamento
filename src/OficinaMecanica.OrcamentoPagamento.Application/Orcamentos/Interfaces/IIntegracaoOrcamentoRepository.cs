@@ -1,4 +1,6 @@
-namespace OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+
+namespace OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 
 public interface IIntegracaoOrcamentoRepository
 {

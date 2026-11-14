@@ -1,3 +1,6 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Mensagens.Contratos;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.ProcessarMensagemOrcamento;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
@@ -19,24 +22,39 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
     public Task DisposeAsync() => Task.CompletedTask;
     private ServiceProvider CriarServicos() => new ServiceCollection().AddLogging().AddApplication()
         .AddInfrastructure(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        { ["ConnectionStrings:DefaultConnection"] = fixture.ConnectionString }).Build()).BuildServiceProvider();
+        {
+            ["ConnectionStrings:DefaultConnection"] = fixture.ConnectionString
+        }).Build()).BuildServiceProvider();
     private async Task ProcessarAsync(MensagemIntegracao mensagem)
     {
         await using var servicos = CriarServicos();
         await using var scope = servicos.CreateAsyncScope();
-        await scope.ServiceProvider.GetRequiredService<ProcessadorMensagemOrcamento>().ProcessarAsync(JsonContrato.Serializar(mensagem));
+        await scope.ServiceProvider.GetRequiredService<ProcessarMensagemOrcamentoUseCase>().ExecuteAsync(JsonContrato.Serializar(mensagem));
     }
     [Fact]
     public async Task Dado_ReentregasAposReinicio_Quando_Processar_Entao_DevePreservarSnapshotEventoETraceOriginal()
     {
         // Arrange
-        var mensagem = MensagemOrcamentoTestDataFactory.Gerar() with { TraceContext = new() { ["traceparent"] = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" } };
+        var mensagem = MensagemOrcamentoTestDataFactory.Gerar() with
+        {
+            TraceContext = new()
+            {
+                ["traceparent"] = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+            }
+        };
         await ProcessarAsync(mensagem);
         await using var inicial = fixture.CriarDbContext();
         var corpo = (await inicial.Outbox.SingleAsync()).Corpo;
         // Act
         await ProcessarAsync(mensagem);
-        await ProcessarAsync(mensagem with { MensagemId = Guid.NewGuid(), TraceContext = new() { ["token"] = "descartar" } });
+        await ProcessarAsync(mensagem with
+        {
+            MensagemId = Guid.NewGuid(),
+            TraceContext = new()
+            {
+                ["token"] = "descartar"
+            }
+        });
         // Assert
         await using var verificacao = fixture.CriarDbContext();
         (await verificacao.Orcamentos.CountAsync()).Should().Be(1);
@@ -57,7 +75,10 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         var divergente = mensagem with
         {
             MensagemId = novaMensagem ? Guid.NewGuid() : mensagem.MensagemId,
-            Dados = JsonSerializer.SerializeToElement(dados with { ClienteId = Guid.NewGuid() }, JsonContrato.Options)
+            Dados = JsonSerializer.SerializeToElement(dados with
+            {
+                ClienteId = Guid.NewGuid()
+            }, JsonContrato.Options)
         };
         // Act / Assert
         await FluentActions.Awaiting(() => ProcessarAsync(divergente)).Should().ThrowAsync<ContratoMensagemException>();
@@ -75,7 +96,10 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         // Act
         await ProcessarAsync(cancelar);
         await ProcessarAsync(gerar);
-        await ProcessarAsync(cancelar with { MensagemId = Guid.NewGuid() });
+        await ProcessarAsync(cancelar with
+        {
+            MensagemId = Guid.NewGuid()
+        });
         // Assert
         await using var contexto = fixture.CriarDbContext();
         (await contexto.Orcamentos.CountAsync()).Should().Be(0);
@@ -95,7 +119,10 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         var cancelar = MensagemOrcamentoTestDataFactory.Criar("CancelarOrcamento", new CancelarOrcamentoDados(id, 1, "Orçamento recusado"), gerar.SagaId, gerar.OrdemServicoId);
         // Act
         await ProcessarAsync(cancelar);
-        await ProcessarAsync(cancelar with { MensagemId = Guid.NewGuid() });
+        await ProcessarAsync(cancelar with
+        {
+            MensagemId = Guid.NewGuid()
+        });
         // Assert
         await using var contexto = fixture.CriarDbContext();
         var orcamento = await contexto.Orcamentos.SingleAsync();
@@ -126,14 +153,14 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         await using var servicos = CriarServicos();
         await using var scope = servicos.CreateAsyncScope();
         var sp = scope.ServiceProvider;
-        var processor = new ProcessadorMensagemOrcamento(
+        var processor = new ProcessarMensagemOrcamentoUseCase(
             new RecebimentoComFalha(sp.GetRequiredService<IRecebimentoMensagemRepository>()),
             sp.GetRequiredService<ICancelamentoMensagemRepository>(), sp.GetRequiredService<Domain.Orcamentos.Interfaces.IOrcamentoRepository>(),
             sp.GetRequiredService<IIntegracaoOrcamentoRepository>(),
             sp.GetRequiredService<Application.Orcamentos.OrcamentoUseCases.GerarOrcamento.GerarOrcamentoUseCase>(),
             sp.GetRequiredService<Application.Orcamentos.OrcamentoUseCases.CancelarOrcamento.CancelarOrcamentoUseCase>(), TimeProvider.System);
         // Act / Assert
-        await FluentActions.Awaiting(() => processor.ProcessarAsync(JsonContrato.Serializar(MensagemOrcamentoTestDataFactory.Gerar())))
+        await FluentActions.Awaiting(() => processor.ExecuteAsync(JsonContrato.Serializar(MensagemOrcamentoTestDataFactory.Gerar())))
             .Should().ThrowAsync<IOException>();
         await using var contexto = fixture.CriarDbContext();
         (await contexto.Orcamentos.CountAsync()).Should().Be(0);

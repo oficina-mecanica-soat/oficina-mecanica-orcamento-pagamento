@@ -1,13 +1,19 @@
 using Microsoft.EntityFrameworkCore;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
-namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
 
 public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoRepository
 {
     private readonly OrcamentoPagamentoDbContext _dbContext;
-    public IntegracaoOrcamentoRepository(OrcamentoPagamentoDbContext dbContext) { _dbContext = dbContext; }
+
+    public IntegracaoOrcamentoRepository(OrcamentoPagamentoDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
 
     public async Task RegistrarContextoAsync(Guid orcamentoId, ContextoIntegracao contexto, CancellationToken cancellationToken = default)
     {

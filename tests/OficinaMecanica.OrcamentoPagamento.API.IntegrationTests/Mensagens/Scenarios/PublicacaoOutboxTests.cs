@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using FluentAssertions;
@@ -13,7 +14,12 @@ public sealed class PublicacaoOutboxTests(OrcamentoPagamentoApiFixture fixture) 
     public Task InitializeAsync() => fixture.ResetarBancoAsync();
     public Task DisposeAsync() => Task.CompletedTask;
     private static MensagemIntegracao Mensagem() => new(Guid.NewGuid(), "OrcamentoGerado", 1, Guid.NewGuid(), Guid.NewGuid(),
-        "publicacao-teste", Guid.NewGuid(), DateTimeOffset.UtcNow, JsonSerializer.SerializeToElement(new { orcamentoId = Guid.NewGuid(), versao = 1, valorTotal = 150m }));
+        "publicacao-teste", Guid.NewGuid(), DateTimeOffset.UtcNow, JsonSerializer.SerializeToElement(new
+        {
+            orcamentoId = Guid.NewGuid(),
+            versao = 1,
+            valorTotal = 150m
+        }));
     private async Task<MensagemIntegracao> PrepararAsync()
     {
         var mensagem = Mensagem();
@@ -63,7 +69,9 @@ public sealed class PublicacaoOutboxTests(OrcamentoPagamentoApiFixture fixture) 
         relogio.Avancar(61);
         transporte.AposEnviar = null;
         await using (var contexto = fixture.CriarDbContext())
-        { (await new PublicadorOutbox(contexto, transporte, relogio).PublicarProximaAsync()).Should().BeTrue(); }
+        {
+            (await new PublicadorOutbox(contexto, transporte, relogio).PublicarProximaAsync()).Should().BeTrue();
+        }
         // Assert
         transporte.Corpos.Should().HaveCount(2);
         transporte.Corpos.Distinct().Should().ContainSingle();
@@ -112,12 +120,21 @@ public sealed class PublicacaoOutboxTests(OrcamentoPagamentoApiFixture fixture) 
     private sealed class TransporteTeste : ITransporteMensagem
     {
         public ConcurrentBag<string> Corpos { get; } = [];
-        public bool Falhar { get; set; }
-        public Action? AposEnviar { get; set; }
+        public bool Falhar
+        {
+            get; set;
+        }
+        public Action? AposEnviar
+        {
+            get; set;
+        }
         public async Task PublicarAsync(string destino, string corpo, CancellationToken ct)
         {
             Corpos.Add(corpo);
-            if (Falhar) { throw new IOException("Falha simulada no transporte local."); }
+            if (Falhar)
+            {
+                throw new IOException("Falha simulada no transporte local.");
+            }
             await Task.Delay(30, ct);
             AposEnviar?.Invoke();
         }
