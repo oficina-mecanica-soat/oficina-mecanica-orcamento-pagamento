@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Observabilidade;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
 namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
@@ -10,15 +11,18 @@ public sealed class PublicadorOutbox
     private readonly OrcamentoPagamentoDbContext _dbContext;
     private readonly ITransporteMensagem _transporte;
     private readonly TimeProvider _relogio;
+    private readonly ObservabilidadeMensagens? _observabilidade;
 
     public PublicadorOutbox(
         OrcamentoPagamentoDbContext dbContext,
         ITransporteMensagem transporte,
-        TimeProvider relogio)
+        TimeProvider relogio,
+        ObservabilidadeMensagens? observabilidade = null)
     {
         _dbContext = dbContext;
         _transporte = transporte;
         _relogio = relogio;
+        _observabilidade = observabilidade;
     }
     public async Task<bool> PublicarProximaAsync(CancellationToken cancellationToken = default)
     {
@@ -37,6 +41,7 @@ public sealed class PublicadorOutbox
         {
             return false;
         }
+        using var escopo = _observabilidade?.Iniciar("orcamento_pagamento.publicar", pendente.Corpo);
         try
         {
             await _transporte.PublicarAsync("OrdemServico", pendente.Corpo, cancellationToken);
@@ -57,6 +62,10 @@ public sealed class PublicadorOutbox
         var confirmados = await registros.Where(r => r.Id == pendente.Id && r.Responsavel == responsavel && r.PublicadoEm == null)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.PublicadoEm, _relogio.GetUtcNow()).SetProperty(r => r.Responsavel, (Guid?)null)
                 .SetProperty(r => r.LeaseAte, (DateTimeOffset?)null), cancellationToken);
+        if (confirmados == 1)
+        {
+            escopo?.Concluir();
+        }
         return confirmados == 1;
     }
 }

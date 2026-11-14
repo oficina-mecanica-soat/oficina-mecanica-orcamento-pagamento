@@ -61,7 +61,7 @@ O adaptador oferece criação de preferência Checkout Pro, reconciliação por 
 
 O validador HMAC autentica assinatura, requisição e identificador do recurso conforme o manifesto do provedor. Isso não confirma pagamento nem deduplica efeitos: o caso de uso precisa consultar o provedor, conferir o snapshot e confirmar estado/Inbox/Outbox na transação local. Timestamp participa da assinatura; este componente não impõe janela de expiração, e a proteção contra reentrega pertence à idempotência do fluxo.
 
-Essa configuração compõe os adaptadores; não expõe rotas de cobrança/webhook nem registra pagamento automaticamente. Referências: [preferências](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/overview) e [notificações](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/payment-notifications).
+Essa configuração compõe os adaptadores; as rotas de consulta e Webhook são descritas abaixo. A confirmação depende da consulta e validação do estado no provedor. Referências: [preferências](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/overview) e [notificações](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/payment-notifications).
 
 ## Contrato HTTP local
 
@@ -156,3 +156,9 @@ Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMens
 O runtime requer banco/usuário isolados, fila/DLQ e configuração de workload/Gateway fornecidos pelas esteiras correspondentes. O publicador conserva a ordem global das pendências; sua concorrência/política de falha não deve ser ampliada sem testes do transporte real. A instrumentação nativa do Datadog acompanha a implantação. Progresso, dependências e critérios de aceite ficam no backlog canônico da API.
 
 Os testes do provedor substituto comprovam o comportamento local; não comprovam checkout ou Webhook reais do Mercado Pago. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.
+
+### Rastreamento das mensagens
+
+A Infrastructure usa o SDK nativo Datadog 3.50.0, conforme a referência do Execução e a versão do profiler adotada na API. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
+
+A criação/exportação dos spans exige profiler e Agent compatíveis no workload. Os testes locais sem profiler verificam logs, restauração de escopos, filtragem e preservação do carrier; não comprovam ingestão Datadog ou rastreamento distribuído implantado. Não há OpenTelemetry ou novo Agent.

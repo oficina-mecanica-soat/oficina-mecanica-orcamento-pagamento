@@ -3,22 +3,25 @@ using Amazon.SQS;
 using Amazon.SQS.Model;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Observabilidade;
 
 namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
 public sealed class ConsumidorSqs
 {
+    private readonly ObservabilidadeMensagens? _observabilidade;
     private readonly IAmazonSQS _client;
     private readonly IProcessadorMensagem _processador;
     private readonly string _filaEntradaUrl;
     private readonly TimeProvider _relogio;
 
-    public ConsumidorSqs(IAmazonSQS client, IProcessadorMensagem processador, string filaEntradaUrl, TimeProvider relogio)
+    public ConsumidorSqs(IAmazonSQS client, IProcessadorMensagem processador, string filaEntradaUrl, TimeProvider relogio, ObservabilidadeMensagens? observabilidade = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(processador);
         ArgumentNullException.ThrowIfNull(relogio);
         ContratoFilaSqs.ValidarUrl(filaEntradaUrl);
+        _observabilidade = observabilidade;
         _client = client;
         _processador = processador;
         _filaEntradaUrl = filaEntradaUrl;
@@ -105,7 +108,9 @@ public sealed class ConsumidorSqs
         {
             throw new ContratoMensagemException("METADADOS_FIFO_DIVERGENTES");
         }
+        using var escopo = _observabilidade?.Iniciar("orcamento_pagamento.processar", recebida.Body);
         await _processador.ProcessarAsync(recebida.Body, ct);
+        escopo?.Concluir();
     }
 
     private async Task RenovarVisibilidadeAsync(string recibo, Task processamento, CancellationToken ct)
