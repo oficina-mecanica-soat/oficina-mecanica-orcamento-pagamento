@@ -455,6 +455,8 @@ jobs:
 
           VALIDAR_MENSAGERIA
 
+      - name: "🧩 Preparar composição da aplicação"
+        run: &validacoes_aplicacao |
           cat > "$RUNNER_TEMP/aplicacao-orcamento.cjs" <<'VALIDAR_APLICACAO'
           'use strict';
           const fs = require('node:fs'),
@@ -873,6 +875,8 @@ jobs:
 
           VALIDAR_APLICACAO
 
+      - name: "🔐 Preparar proteção dos artefatos"
+        run: &protecao_artefatos |
           cat > "$RUNNER_TEMP/proteger-artefatos.cjs" <<'PROTEGER_ARTEFATOS'
           'use strict';
           const fs = require('node:fs'),
@@ -988,6 +992,8 @@ jobs:
 
           PROTEGER_ARTEFATOS
 
+      - name: "🛡️ Preparar recuperação declarativa de destroy"
+        run: &recuperacao_destroy |
           cat > "$RUNNER_TEMP/prepare-destroy-orcamento.cjs" <<'PREPARAR_DESTROY'
           const fs = require('node:fs');
           const path = require('node:path');
@@ -1296,6 +1302,15 @@ jobs:
 
       - name: "🛡️ Preparar validações definidas no workflow"
         run: *validacoes_mensageria
+
+      - name: "🧩 Preparar composição da aplicação"
+        run: *validacoes_aplicacao
+
+      - name: "🔐 Preparar proteção dos artefatos"
+        run: *protecao_artefatos
+
+      - name: "🛡️ Preparar recuperação declarativa de destroy"
+        run: *recuperacao_destroy
 
       - name: "🛡️ Conferir habilitação do deploy AWS"
         env:

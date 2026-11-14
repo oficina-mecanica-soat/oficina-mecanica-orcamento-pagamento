@@ -369,6 +369,8 @@ jobs:
             fs.writeFileSync(path.join(process.env.RUNNER_TEMP,file),linhas.slice(1,fim).map(l=>l.slice(10)).join('\n'));
           }
           PREPARAR_TESTES_MENSAGERIA
+      - name: "🧪 Testar ownership, filas e plano salvo"
+        run: |
           cat > "$RUNNER_TEMP/mensageria-orcamento.test.cjs" <<'TESTE_MENSAGERIA'
           const { test } = require('node:test');
           const assert = require('node:assert/strict');
@@ -536,6 +538,8 @@ jobs:
 
           TESTE_MENSAGERIA
           node --test "$RUNNER_TEMP/mensageria-orcamento.test.cjs"
+      - name: "🧪 Testar composição, recuperação e proteção dos artefatos"
+        run: |
           cat > "$RUNNER_TEMP/aplicacao-orcamento.test.cjs" <<'TESTAR_APLICACAO'
           const { test } = require('node:test');
           const assert = require('node:assert/strict');
