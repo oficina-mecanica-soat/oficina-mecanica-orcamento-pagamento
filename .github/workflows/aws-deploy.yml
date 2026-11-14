@@ -137,7 +137,8 @@ jobs:
                 aws_ssm_parameter: [
                   'orcamento_pagamento_mensageria',
                   'orcamento_pagamento_mensageria_status',
-                  'orcamento_pagamento_aplicacao_status'
+                  'orcamento_pagamento_aplicacao_status',
+                  'orcamento_pagamento_fluxo_distribuido'
                 ]
               };
               if (!recursos[r.type]?.includes(r.name)) throw new Error('Recurso desconhecido no state.');
@@ -153,6 +154,7 @@ jobs:
                     ![
                       n.status,
                       '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+                      '/oficina-mecanica/development/orcamento-pagamento/fluxo_distribuido_habilitado',
                       ...chaves.map((k) => n.prefixo + '/' + k)
                     ].includes(a.name) ||
                     a.arn !== 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + a.name
@@ -313,6 +315,7 @@ jobs:
             for (const nome of [
               n.status,
               '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+              '/oficina-mecanica/development/orcamento-pagamento/fluxo_distribuido_habilitado',
               ...chaves.map((k) => n.prefixo + '/' + k)
             ])
               if (aws('ssm', 'get-parameter', '--name', nome) !== null)
@@ -343,7 +346,8 @@ jobs:
                 aws_ssm_parameter: [
                   'orcamento_pagamento_mensageria',
                   'orcamento_pagamento_mensageria_status',
-                  'orcamento_pagamento_aplicacao_status'
+                  'orcamento_pagamento_aplicacao_status',
+                  'orcamento_pagamento_fluxo_distribuido'
                 ]
               };
               if (!nomesRecursos[r.type]?.includes(r.name)) throw new Error('Plano contém recurso desconhecido.');
@@ -355,6 +359,7 @@ jobs:
                 ![
                   n.status,
                   '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+                  '/oficina-mecanica/development/orcamento-pagamento/fluxo_distribuido_habilitado',
                   ...chaves.map((k) => n.prefixo + '/' + k)
                 ].includes(atributos.name)
               )
@@ -674,7 +679,14 @@ jobs:
               if (atributos?.QueueArn !== arn || atributos.FifoQueue !== 'true')
                 throw new FalhaConfiguracao('Fila real OS divergente.');
             }
+            const distribuido = booleano(env.FLUXO_DISTRIBUIDO_ENABLED || 'false', 'FLUXO_DISTRIBUIDO_ENABLED');
+            if (distribuido && !remoto)
+              throw new FalhaConfiguracao('O corte distribuído exige os workers habilitados.');
+            const nodePort = Number(parametro('kubernetes/orcamento_pagamento_internal_node_port'));
+            if (nodePort !== 30082) throw new FalhaConfiguracao('NodePort publicado pelo Kubernetes divergente.');
             return {
+              fluxo_distribuido_habilitado: distribuido,
+              aplicacao_node_port: nodePort,
               aws_region: env.AWS_REGION,
               ssm_environment_name: 'development',
               aplicacao_habilitada: true,
@@ -1154,6 +1166,7 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           JWT_ISSUER: ${{ vars.JWT_ISSUER || 'oficina-mecanica-auth' }}
           JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE || 'oficina-mecanica-api' }}
+          FLUXO_DISTRIBUIDO_ENABLED: ${{ vars.FLUXO_DISTRIBUIDO_ENABLED || 'false' }}
           PROCESSAMENTO_REMOTO_ENABLED: ${{ vars.PROCESSAMENTO_REMOTO_ENABLED || 'false' }}
           MERCADO_PAGO_ATIVO: ${{ vars.MERCADO_PAGO_ATIVO || 'false' }}
           MERCADO_PAGO_ACCESS_TOKEN: ${{ secrets.MERCADO_PAGO_ACCESS_TOKEN }}

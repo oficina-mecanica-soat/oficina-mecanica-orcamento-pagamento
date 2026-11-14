@@ -17,6 +17,7 @@ public static class ApiServiceCollectionExtensions
                 options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
             });
 
+        services.AddOptions<FluxoDistribuidoOptions>().Bind(configuration.GetSection(FluxoDistribuidoOptions.SectionName));
         services.AddHealthChecks();
         services.AddEndpointsApiExplorer();
         services.AddSwaggerGen(options => options.AddJwtSwagger());

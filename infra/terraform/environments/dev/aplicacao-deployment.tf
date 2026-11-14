@@ -22,6 +22,7 @@ resource "kubernetes_deployment_v1" "orcamento_pagamento" {
         })
 
         annotations = {
+          "checksum/config"                                            = sha256(jsonencode(kubernetes_config_map_v1.orcamento_pagamento[0].data))
           "ad.datadoghq.com/oficina-mecanica-orcamento-pagamento.logs" = jsonencode([{ source = "csharp", service = "oficina-mecanica-orcamento-pagamento" }])
           "admission.datadoghq.com/dotnet-lib.version"                 = "3.50.0"
         }

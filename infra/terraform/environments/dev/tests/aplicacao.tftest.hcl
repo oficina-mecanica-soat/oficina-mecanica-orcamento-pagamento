@@ -7,6 +7,14 @@ mock_provider "aws" {
   }
 }
 mock_provider "kubernetes" {}
+override_resource {
+  target          = aws_sqs_queue.orcamento_pagamento_entrada
+  override_during = plan
+  values = {
+    url = "https://sqs.us-east-1.amazonaws.com/123456789012/oficina-mecanica-orcamento-pagamento-development.fifo"
+    arn = "arn:aws:sqs:us-east-1:123456789012:oficina-mecanica-orcamento-pagamento-development.fifo"
+  }
+}
 variables {
   aws_region             = "us-east-1"
   aplicacao_habilitada   = true
@@ -49,6 +57,31 @@ run "ativacao_remota_usa_conta_e_resultados_do_owner_os" {
     condition     = kubernetes_config_map_v1.orcamento_pagamento[0].data["ProcessamentoRemoto__FilaResultadosOsUrl"] == var.os_entrada_queue_url
     error_message = "Resultados devem ir à entrada da OS."
   }
+}
+
+run "corte_publica_modo_do_workload_e_reinicia_pods_por_configuracao" {
+  command = plan
+  variables {
+    fluxo_distribuido_habilitado    = true
+    processamento_remoto_habilitado = true
+    conta_aws                       = "123456789012"
+    os_entrada_queue_url            = "https://sqs.us-east-1.amazonaws.com/123456789012/oficina-mecanica-api-development.fifo"
+  }
+  assert {
+    condition = (
+      kubernetes_config_map_v1.orcamento_pagamento[0].data["Integracoes__FluxoDistribuido__Habilitado"] == "true" &&
+      aws_ssm_parameter.orcamento_pagamento_fluxo_distribuido[0].value == "true" &&
+      aws_ssm_parameter.orcamento_pagamento_fluxo_distribuido[0].name == "/oficina-mecanica/development/orcamento-pagamento/fluxo_distribuido_habilitado" &&
+      kubernetes_deployment_v1.orcamento_pagamento[0].spec[0].template[0].metadata[0].annotations["checksum/config"] == sha256(jsonencode(kubernetes_config_map_v1.orcamento_pagamento[0].data))
+    )
+    error_message = "Corte deve publicar a flag aplicada e provocar rollout quando a configuração mudar."
+  }
+}
+
+run "corte_sem_worker_nao_retira_rotas" {
+  command = plan
+  variables { fluxo_distribuido_habilitado = true }
+  expect_failures = [var.fluxo_distribuido_habilitado]
 }
 run "fila_alheia_nao_ativa_workers" {
   command = plan
