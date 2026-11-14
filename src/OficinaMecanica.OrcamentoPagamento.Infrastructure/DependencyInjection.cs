@@ -1,10 +1,14 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using OficinaMecanica.OrcamentoPagamento.Application.Common;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Observabilidade;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
@@ -23,6 +27,8 @@ public static class DependencyInjection
         services.AddDbContext<OrcamentoPagamentoDbContext>(options => options.UseSqlServer(connectionString));
         services.AddScoped<IOrcamentoRepository, OrcamentoRepository>();
         services.AddScoped<IContextoIntegracaoOrcamentoStore, ContextoIntegracaoOrcamentoStore>();
+        services.TryAddScoped(provider => new ObservabilidadeMensagens(
+            provider.GetService<ILogger<ObservabilidadeMensagens>>() ?? NullLogger<ObservabilidadeMensagens>.Instance));
         services.AddScoped<IOutbox, SqlOutbox>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IInbox, SqlInbox>();
