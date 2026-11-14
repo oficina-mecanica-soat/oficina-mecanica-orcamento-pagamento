@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos;
+using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos;
 
 namespace OficinaMecanica.OrcamentoPagamento.Application;
 
@@ -10,6 +11,7 @@ public static class DependencyInjection
         services.AddAutoMapper(_ => { }, typeof(DependencyInjection).Assembly);
         services.AddSingleton(TimeProvider.System);
         services.AddOrcamentosApplication();
+        services.AddPagamentosApplication();
 
         return services;
     }

@@ -5,6 +5,7 @@ using Microsoft.Data.SqlClient;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 using Respawn;
 using Testcontainers.MsSql;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Fixtures;
 
@@ -20,6 +21,11 @@ public sealed class OrcamentoPagamentoApiFixture : IAsyncLifetime
 
     public HttpClient CreateClient() => (_factory ?? throw new InvalidOperationException("Fixture não inicializada."))
         .CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+    public HttpClient CreateClient(Action<IServiceCollection> configurarServicos) =>
+        (_factory ?? throw new InvalidOperationException("Fixture não inicializada."))
+            .WithWebHostBuilder(builder => builder.ConfigureServices(configurarServicos))
+            .CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
 
     public OrcamentoPagamentoDbContext CriarDbContext() =>
         new(new DbContextOptionsBuilder<OrcamentoPagamentoDbContext>().UseSqlServer(ConnectionString).Options);

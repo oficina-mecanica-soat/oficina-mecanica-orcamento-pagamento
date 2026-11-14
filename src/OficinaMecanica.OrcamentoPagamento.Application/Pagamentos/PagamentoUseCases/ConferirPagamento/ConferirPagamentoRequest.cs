@@ -1,0 +1,3 @@
+namespace OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.PagamentoUseCases.ConferirPagamento;
+
+public sealed record ConferirPagamentoRequest(string IdentificadorExterno, Guid OperacaoId);

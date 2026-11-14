@@ -1,6 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos.Repositories;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos.Options;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos.Services;
 
@@ -10,6 +13,8 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddPagamentosInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddScoped<IPagamentoRepository, PagamentoRepository>();
+        services.AddScoped<IContextoIntegracaoPagamentoStore, ContextoIntegracaoPagamentoStore>();
         services.AddOptions<MercadoPagoOptions>()
             .Bind(configuration.GetSection(MercadoPagoOptions.SectionName))
             .Validate(options => !options.Ativo || options.PossuiConfiguracaoValida(), "Configuração do Mercado Pago incompleta ou inválida.")

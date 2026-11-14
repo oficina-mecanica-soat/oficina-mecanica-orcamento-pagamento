@@ -97,6 +97,72 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
                     b.ToTable("Orcamentos", "OrcamentoPagamento");
                 });
 
+            modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Aggregates.Pagamento", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CheckoutId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("ClienteId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CorrelationId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("EnderecoCheckout")
+                        .HasMaxLength(2048)
+                        .HasColumnType("nvarchar(2048)");
+
+                    b.Property<string>("IdentificadorPagamentoProvedor")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("MensagemOrigemId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OrcamentoId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OrdemServicoId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<Guid>("SagaId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TraceContext")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<decimal>("Valor")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("Versao")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrcamentoId")
+                        .IsUnique();
+
+                    b.HasIndex("OrdemServicoId", "Versao")
+                        .IsUnique();
+
+                    b.ToTable("Pagamentos", "OrcamentoPagamento");
+                });
+
             modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens.RecebimentoMensagem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -234,6 +300,15 @@ namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Migrations
                     b.Navigation("PecasInsumos");
 
                     b.Navigation("Servicos");
+                });
+
+            modelBuilder.Entity("OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Aggregates.Pagamento", b =>
+                {
+                    b.HasOne("OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Aggregates.Orcamento", null)
+                        .WithMany()
+                        .HasForeignKey("OrcamentoId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }
