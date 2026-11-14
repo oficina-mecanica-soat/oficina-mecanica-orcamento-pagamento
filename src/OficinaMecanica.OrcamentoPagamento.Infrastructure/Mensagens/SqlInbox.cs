@@ -5,13 +5,13 @@ using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
-namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
-public sealed class RecebimentoMensagemRepository : IRecebimentoMensagemRepository
+public sealed class SqlInbox : IInbox
 {
     private readonly OrcamentoPagamentoDbContext _dbContext;
 
-    public RecebimentoMensagemRepository(OrcamentoPagamentoDbContext dbContext)
+    public SqlInbox(OrcamentoPagamentoDbContext dbContext)
     {
         _dbContext = dbContext;
     }

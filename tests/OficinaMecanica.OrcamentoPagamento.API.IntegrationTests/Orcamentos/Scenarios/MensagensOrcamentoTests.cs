@@ -154,9 +154,10 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         await using var scope = servicos.CreateAsyncScope();
         var sp = scope.ServiceProvider;
         var processor = new ProcessarMensagemOrcamentoUseCase(
-            new RecebimentoComFalha(sp.GetRequiredService<IRecebimentoMensagemRepository>()),
-            sp.GetRequiredService<ICancelamentoMensagemRepository>(), sp.GetRequiredService<Domain.Orcamentos.Interfaces.IOrcamentoRepository>(),
-            sp.GetRequiredService<IIntegracaoOrcamentoRepository>(),
+            new RecebimentoComFalha(sp.GetRequiredService<IInbox>()),
+            sp.GetRequiredService<ICancelamentoMensagemStore>(), sp.GetRequiredService<Domain.Orcamentos.Interfaces.IOrcamentoRepository>(),
+            sp.GetRequiredService<IContextoIntegracaoOrcamentoStore>(),
+            sp.GetRequiredService<IOutbox>(),
             sp.GetRequiredService<Application.Orcamentos.OrcamentoUseCases.GerarOrcamento.GerarOrcamentoUseCase>(),
             sp.GetRequiredService<Application.Orcamentos.OrcamentoUseCases.CancelarOrcamento.CancelarOrcamentoUseCase>(), TimeProvider.System);
         // Act / Assert
@@ -167,7 +168,7 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
         (await contexto.Outbox.CountAsync()).Should().Be(0);
         (await contexto.Set<RecebimentoMensagem>().CountAsync()).Should().Be(0);
     }
-    private sealed class RecebimentoComFalha(IRecebimentoMensagemRepository inner) : IRecebimentoMensagemRepository
+    private sealed class RecebimentoComFalha(IInbox inner) : IInbox
     {
         public Task ExecutarEmTransacaoAsync(Func<CancellationToken, Task> operacao, CancellationToken ct) => inner.ExecutarEmTransacaoAsync(operacao, ct);
         public Task<bool> VerificarRepeticaoAsync(Guid id, string chave, string hash, CancellationToken ct) => inner.VerificarRepeticaoAsync(id, chave, hash, ct);

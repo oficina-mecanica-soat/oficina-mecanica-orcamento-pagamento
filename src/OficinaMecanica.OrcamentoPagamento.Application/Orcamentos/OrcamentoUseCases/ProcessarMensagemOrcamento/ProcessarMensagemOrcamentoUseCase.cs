@@ -10,21 +10,30 @@ namespace OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUse
 
 public sealed class ProcessarMensagemOrcamentoUseCase
 {
-    private readonly IRecebimentoMensagemRepository _recebimentoMensagemRepository;
-    private readonly ICancelamentoMensagemRepository _cancelamentoMensagemRepository;
+    private readonly IInbox _inbox;
+    private readonly ICancelamentoMensagemStore _cancelamentoMensagemStore;
     private readonly IOrcamentoRepository _orcamentoRepository;
-    private readonly IIntegracaoOrcamentoRepository _integracaoOrcamentoRepository;
+    private readonly IContextoIntegracaoOrcamentoStore _contextoIntegracaoStore;
+    private readonly IOutbox _outbox;
     private readonly GerarOrcamentoUseCase _gerarOrcamentoUseCase;
     private readonly CancelarOrcamentoUseCase _cancelarOrcamentoUseCase;
     private readonly TimeProvider _relogio;
 
-    public ProcessarMensagemOrcamentoUseCase(IRecebimentoMensagemRepository recebimentos, ICancelamentoMensagemRepository cancelamentos,
-        IOrcamentoRepository orcamentos, IIntegracaoOrcamentoRepository integracao, GerarOrcamentoUseCase gerar, CancelarOrcamentoUseCase cancelar, TimeProvider relogio)
+    public ProcessarMensagemOrcamentoUseCase(
+        IInbox inbox,
+        ICancelamentoMensagemStore cancelamentos,
+        IOrcamentoRepository orcamentos,
+        IContextoIntegracaoOrcamentoStore integracao,
+        IOutbox outbox,
+        GerarOrcamentoUseCase gerar,
+        CancelarOrcamentoUseCase cancelar,
+        TimeProvider relogio)
     {
-        _recebimentoMensagemRepository = recebimentos;
-        _cancelamentoMensagemRepository = cancelamentos;
+        _inbox = inbox;
+        _cancelamentoMensagemStore = cancelamentos;
         _orcamentoRepository = orcamentos;
-        _integracaoOrcamentoRepository = integracao;
+        _contextoIntegracaoStore = integracao;
+        _outbox = outbox;
         _gerarOrcamentoUseCase = gerar;
         _cancelarOrcamentoUseCase = cancelar;
         _relogio = relogio;
@@ -39,7 +48,7 @@ public sealed class ProcessarMensagemOrcamentoUseCase
         {
             throw new ContratoMensagemException("TIPO_DESCONHECIDO");
         }
-        await _recebimentoMensagemRepository.ExecutarEmTransacaoAsync(async cancellationTokenTransacao =>
+        await _inbox.ExecutarEmTransacaoAsync(async cancellationTokenTransacao =>
         {
             int versao;
             object dados;
@@ -82,7 +91,7 @@ public sealed class ProcessarMensagemOrcamentoUseCase
             }
             var chave = $"{mensagem.Tipo}:{mensagem.OrdemServicoId:D}:{versao}";
             var hash = JsonContrato.Hash(mensagem, dados);
-            if (!await _recebimentoMensagemRepository.VerificarRepeticaoAsync(mensagem.MensagemId, chave, hash, cancellationTokenTransacao))
+            if (!await _inbox.VerificarRepeticaoAsync(mensagem.MensagemId, chave, hash, cancellationTokenTransacao))
             {
                 if (gerar is not null)
                 {
@@ -93,13 +102,13 @@ public sealed class ProcessarMensagemOrcamentoUseCase
                     await CancelarAsync(mensagem, cancelar!, versao, cancellationTokenTransacao);
                 }
             }
-            await _recebimentoMensagemRepository.RegistrarAsync(mensagem.MensagemId, chave, hash, cancellationTokenTransacao);
+            await _inbox.RegistrarAsync(mensagem.MensagemId, chave, hash, cancellationTokenTransacao);
         }, cancellationToken);
     }
 
     private async Task GerarAsync(MensagemIntegracao mensagem, GerarOrcamentoDados dados, CancellationToken cancellationTokenTransacao)
     {
-        var cancelamento = await _cancelamentoMensagemRepository.ObterAsync(mensagem.OrdemServicoId, dados.Versao, cancellationTokenTransacao);
+        var cancelamento = await _cancelamentoMensagemStore.ObterAsync(mensagem.OrdemServicoId, dados.Versao, cancellationTokenTransacao);
         if (cancelamento is not null)
         {
             if (cancelamento.SagaId != mensagem.SagaId)
@@ -122,7 +131,7 @@ public sealed class ProcessarMensagemOrcamentoUseCase
             dados.Itens?.Select(i => i is null ? null! : new PecaInsumoOrcamentoRequest(i.ItemId, i.Descricao, i.Quantidade, i.ValorUnitario)).ToArray()!);
     private async Task CancelarAsync(MensagemIntegracao mensagem, CancelarOrcamentoDados dados, int versao, CancellationToken cancellationTokenTransacao)
     {
-        var anterior = await _cancelamentoMensagemRepository.ObterAsync(mensagem.OrdemServicoId, versao, cancellationTokenTransacao);
+        var anterior = await _cancelamentoMensagemStore.ObterAsync(mensagem.OrdemServicoId, versao, cancellationTokenTransacao);
         if (anterior is not null)
         {
             if (anterior.SagaId != mensagem.SagaId || anterior.Motivo != dados.Motivo.Trim())
@@ -134,7 +143,7 @@ public sealed class ProcessarMensagemOrcamentoUseCase
         var orcamento = await _orcamentoRepository.ObterPorOrdemEVersaoAsync(mensagem.OrdemServicoId, versao, cancellationTokenTransacao);
         if (orcamento is not null)
         {
-            var contexto = await _integracaoOrcamentoRepository.ObterContextoAsync(orcamento.Id, cancellationTokenTransacao);
+            var contexto = await _contextoIntegracaoStore.ObterContextoAsync(orcamento.Id, cancellationTokenTransacao);
             if (contexto.SagaId != mensagem.SagaId)
             {
                 throw new ContratoMensagemException("SAGA_DIVERGENTE");
@@ -150,8 +159,8 @@ public sealed class ProcessarMensagemOrcamentoUseCase
             var resultado = new MensagemIntegracao(Guid.CreateVersion7(), "OrcamentoCancelado", 1, mensagem.SagaId, mensagem.OrdemServicoId,
                 mensagem.CorrelationId, mensagem.MensagemId, _relogio.GetUtcNow(),
                 JsonSerializer.SerializeToElement(new OrcamentoCanceladoDados(null, versao), JsonContrato.Options), mensagem.TraceContext);
-            await _integracaoOrcamentoRepository.AdicionarResultadoAsync(resultado, versao, cancellationTokenTransacao);
+            await _outbox.AdicionarResultadoAsync(resultado, versao, cancellationTokenTransacao);
         }
-        await _cancelamentoMensagemRepository.RegistrarAsync(new(mensagem.OrdemServicoId, versao, mensagem.SagaId, dados.Motivo.Trim()), cancellationTokenTransacao);
+        await _cancelamentoMensagemStore.RegistrarAsync(new(mensagem.OrdemServicoId, versao, mensagem.SagaId, dados.Motivo.Trim()), cancellationTokenTransacao);
     }
 }

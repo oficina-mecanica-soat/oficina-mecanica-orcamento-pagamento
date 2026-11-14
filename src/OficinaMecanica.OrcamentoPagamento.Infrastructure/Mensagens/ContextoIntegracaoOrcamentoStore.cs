@@ -4,13 +4,13 @@ using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
-namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
-public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoRepository
+public sealed class ContextoIntegracaoOrcamentoStore : IContextoIntegracaoOrcamentoStore
 {
     private readonly OrcamentoPagamentoDbContext _dbContext;
 
-    public IntegracaoOrcamentoRepository(OrcamentoPagamentoDbContext dbContext)
+    public ContextoIntegracaoOrcamentoStore(OrcamentoPagamentoDbContext dbContext)
     {
         _dbContext = dbContext;
     }
@@ -39,8 +39,4 @@ public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoReposito
             contexto.TraceContext is null ? null : ContextoTrace.Filtrar(JsonContrato.Ler<Dictionary<string, string>>(contexto.TraceContext)));
     }
 
-    public async Task AdicionarResultadoAsync(MensagemIntegracao mensagem, int versaoNegocio, CancellationToken cancellationToken = default)
-    {
-        await _dbContext.Outbox.AddAsync(RegistroOutbox.Criar(mensagem, versaoNegocio), cancellationToken);
-    }
 }

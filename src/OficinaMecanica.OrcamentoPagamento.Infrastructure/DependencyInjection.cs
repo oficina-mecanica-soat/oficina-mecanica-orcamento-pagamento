@@ -22,10 +22,11 @@ public static class DependencyInjection
         }
         services.AddDbContext<OrcamentoPagamentoDbContext>(options => options.UseSqlServer(connectionString));
         services.AddScoped<IOrcamentoRepository, OrcamentoRepository>();
-        services.AddScoped<IIntegracaoOrcamentoRepository, IntegracaoOrcamentoRepository>();
+        services.AddScoped<IContextoIntegracaoOrcamentoStore, ContextoIntegracaoOrcamentoStore>();
+        services.AddScoped<IOutbox, SqlOutbox>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
-        services.AddScoped<IRecebimentoMensagemRepository, RecebimentoMensagemRepository>();
-        services.AddScoped<ICancelamentoMensagemRepository, CancelamentoMensagemRepository>();
+        services.AddScoped<IInbox, SqlInbox>();
+        services.AddScoped<ICancelamentoMensagemStore, CancelamentoMensagemStore>();
         return services;
     }
 }

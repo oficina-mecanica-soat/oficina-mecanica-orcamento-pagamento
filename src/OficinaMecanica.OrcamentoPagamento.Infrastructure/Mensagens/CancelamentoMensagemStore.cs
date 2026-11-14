@@ -5,13 +5,13 @@ using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
-namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
-public sealed class CancelamentoMensagemRepository : ICancelamentoMensagemRepository
+public sealed class CancelamentoMensagemStore : ICancelamentoMensagemStore
 {
     private readonly OrcamentoPagamentoDbContext _dbContext;
 
-    public CancelamentoMensagemRepository(OrcamentoPagamentoDbContext dbContext)
+    public CancelamentoMensagemStore(OrcamentoPagamentoDbContext dbContext)
     {
         _dbContext = dbContext;
     }

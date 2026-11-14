@@ -1,9 +1,9 @@
-using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using AutoMapper;
 using FluentValidation;
 using Microsoft.Extensions.Logging;
 using OficinaMecanica.OrcamentoPagamento.Application.Common;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.Responses;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Aggregates;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Entities;
@@ -15,20 +15,29 @@ namespace OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUse
 public sealed class GerarOrcamentoUseCase
 {
     private readonly IOrcamentoRepository _orcamentoRepository;
-    private readonly IIntegracaoOrcamentoRepository _integracaoRepository;
+    private readonly IContextoIntegracaoOrcamentoStore _contextoIntegracaoStore;
+    private readonly IOutbox _outbox;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IValidator<GerarOrcamentoRequest> _validator;
     private readonly IMapper _mapper;
     private readonly TimeProvider _relogio;
     private readonly ILogger<GerarOrcamentoUseCase> _logger;
-    private readonly ICancelamentoMensagemRepository _cancelamentos;
+    private readonly ICancelamentoMensagemStore _cancelamentos;
 
-    public GerarOrcamentoUseCase(IOrcamentoRepository orcamentoRepository, IIntegracaoOrcamentoRepository integracaoRepository,
-        IUnitOfWork unitOfWork, IValidator<GerarOrcamentoRequest> validator, IMapper mapper,
-        TimeProvider relogio, ILogger<GerarOrcamentoUseCase> logger, ICancelamentoMensagemRepository cancelamentos)
+    public GerarOrcamentoUseCase(
+        IOrcamentoRepository orcamentoRepository,
+        IContextoIntegracaoOrcamentoStore integracaoRepository,
+        IOutbox outbox,
+        IUnitOfWork unitOfWork,
+        IValidator<GerarOrcamentoRequest> validator,
+        IMapper mapper,
+        TimeProvider relogio,
+        ILogger<GerarOrcamentoUseCase> logger,
+        ICancelamentoMensagemStore cancelamentos)
     {
         _orcamentoRepository = orcamentoRepository;
-        _integracaoRepository = integracaoRepository;
+        _contextoIntegracaoStore = integracaoRepository;
+        _outbox = outbox;
         _unitOfWork = unitOfWork;
         _validator = validator;
         _mapper = mapper;
@@ -54,7 +63,7 @@ public sealed class GerarOrcamentoUseCase
         var existente = await _orcamentoRepository.ObterPorOrdemEVersaoAsync(request.OrdemServicoId, request.Versao, cancellationToken);
         if (existente is not null)
         {
-            var contexto = await _integracaoRepository.ObterContextoAsync(existente.Id, cancellationToken);
+            var contexto = await _contextoIntegracaoStore.ObterContextoAsync(existente.Id, cancellationToken);
             return existente.PossuiMesmoSnapshot(novo) && contexto.SagaId == request.Contexto.SagaId
                 ? Result<OrcamentoResponse>.Ok(_mapper.Map<OrcamentoResponse>(existente))
                 : Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.ResultadoDivergente, TipoErro.Conflito);
@@ -70,8 +79,8 @@ public sealed class GerarOrcamentoUseCase
                 return;
             }
             await _orcamentoRepository.AdicionarAsync(novo, ct);
-            await _integracaoRepository.RegistrarContextoAsync(novo.Id, request.Contexto, ct);
-            await _integracaoRepository.AdicionarResultadoAsync(ResultadosOrcamento.Gerado(novo, request.Contexto, _relogio), novo.Versao, ct);
+            await _contextoIntegracaoStore.RegistrarContextoAsync(novo.Id, request.Contexto, ct);
+            await _outbox.AdicionarResultadoAsync(ResultadosOrcamento.Gerado(novo, request.Contexto, _relogio), novo.Versao, ct);
         }, cancellationToken);
         if (cancelada)
         {

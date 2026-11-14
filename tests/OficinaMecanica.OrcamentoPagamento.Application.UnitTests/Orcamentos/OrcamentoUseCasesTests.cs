@@ -79,7 +79,7 @@ public sealed class OrcamentoUseCasesTests
         // Arrange
         var dados = new OrcamentoUseCaseTestDataFactory();
         MensagemIntegracao? publicado = null;
-        dados.Integracao.Setup(i => i.AdicionarResultadoAsync(It.IsAny<MensagemIntegracao>(), 1, It.IsAny<CancellationToken>()))
+        dados.Outbox.Setup(i => i.AdicionarResultadoAsync(It.IsAny<MensagemIntegracao>(), 1, It.IsAny<CancellationToken>()))
             .Callback<MensagemIntegracao, int, CancellationToken>((m, _, _) => publicado = m).Returns(Task.CompletedTask);
 
         // Act
@@ -141,7 +141,7 @@ public sealed class OrcamentoUseCasesTests
         var dados = new OrcamentoUseCaseTestDataFactory();
         var orcamento = dados.CriarOrcamento();
         dados.Repository.Setup(r => r.ObterPorIdAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
-        var useCase = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.UnitOfWork.Object,
+        var useCase = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new RegistrarDecisaoOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<RegistrarDecisaoOrcamentoUseCase>.Instance);
 
         // Act
@@ -151,6 +151,7 @@ public sealed class OrcamentoUseCasesTests
         resultado.Erro!.Tipo.Should().Be(TipoErro.NaoEncontrado);
         orcamento.Status.Should().Be(StatusOrcamento.AguardandoAprovacao);
         dados.Integracao.VerifyNoOtherCalls();
+        dados.Outbox.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -161,7 +162,7 @@ public sealed class OrcamentoUseCasesTests
         var orcamento = dados.CriarOrcamento();
         dados.Repository.Setup(r => r.ObterPorIdAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
         dados.Integracao.Setup(i => i.ObterContextoAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(dados.Request.Contexto);
-        var useCase = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.UnitOfWork.Object,
+        var useCase = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new RegistrarDecisaoOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<RegistrarDecisaoOrcamentoUseCase>.Instance);
         var request = new RegistrarDecisaoOrcamentoRequest(orcamento.Id, 1, DecisaoOrcamento.Recusado, Guid.NewGuid(), null);
 
@@ -170,7 +171,7 @@ public sealed class OrcamentoUseCasesTests
         await useCase.ExecuteAsync(request);
 
         // Assert
-        dados.Integracao.Verify(i => i.AdicionarResultadoAsync(It.Is<MensagemIntegracao>(m =>
+        dados.Outbox.Verify(i => i.AdicionarResultadoAsync(It.Is<MensagemIntegracao>(m =>
             m.Tipo == "OrcamentoDecidido" && m.CausationId == request.OperacaoId), 1, It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -182,7 +183,7 @@ public sealed class OrcamentoUseCasesTests
         var orcamento = dados.CriarOrcamento();
         dados.Repository.Setup(r => r.ObterPorIdAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
         dados.Integracao.Setup(i => i.ObterContextoAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(dados.Request.Contexto);
-        var useCase = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.UnitOfWork.Object,
+        var useCase = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new CancelarOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<CancelarOrcamentoUseCase>.Instance);
         var request = new CancelarOrcamentoRequest(orcamento.Id, 1, Guid.NewGuid(), "Recusa");
 
@@ -191,7 +192,7 @@ public sealed class OrcamentoUseCasesTests
         await useCase.ExecuteAsync(request);
 
         // Assert
-        dados.Integracao.Verify(i => i.AdicionarResultadoAsync(It.Is<MensagemIntegracao>(m => m.Tipo == "OrcamentoCancelado"),
+        dados.Outbox.Verify(i => i.AdicionarResultadoAsync(It.Is<MensagemIntegracao>(m => m.Tipo == "OrcamentoCancelado"),
             1, It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -201,9 +202,9 @@ public sealed class OrcamentoUseCasesTests
         // Arrange
         var dados = new OrcamentoUseCaseTestDataFactory();
         var detalhar = new DetalharOrcamentoUseCase(dados.Repository.Object, new DetalharOrcamentoValidator(), dados.Mapper.Object);
-        var decidir = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.UnitOfWork.Object,
+        var decidir = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new RegistrarDecisaoOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<RegistrarDecisaoOrcamentoUseCase>.Instance);
-        var cancelar = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.UnitOfWork.Object,
+        var cancelar = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new CancelarOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<CancelarOrcamentoUseCase>.Instance);
 
         // Act / Assert

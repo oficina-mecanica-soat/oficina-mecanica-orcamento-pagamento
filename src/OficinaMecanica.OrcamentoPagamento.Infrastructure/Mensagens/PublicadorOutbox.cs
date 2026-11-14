@@ -11,7 +11,10 @@ public sealed class PublicadorOutbox
     private readonly ITransporteMensagem _transporte;
     private readonly TimeProvider _relogio;
 
-    public PublicadorOutbox(OrcamentoPagamentoDbContext dbContext, ITransporteMensagem transporte, TimeProvider relogio)
+    public PublicadorOutbox(
+        OrcamentoPagamentoDbContext dbContext,
+        ITransporteMensagem transporte,
+        TimeProvider relogio)
     {
         _dbContext = dbContext;
         _transporte = transporte;
