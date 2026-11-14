@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.ProcessarMensagemOrcamento;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.GerarOrcamento;
@@ -19,6 +20,8 @@ public static class DependencyInjection
         services.AddScoped<DetalharOrcamentoUseCase>();
         services.AddScoped<RegistrarDecisaoOrcamentoUseCase>();
         services.AddScoped<CancelarOrcamentoUseCase>();
+        services.AddScoped<ProcessarMensagemOrcamentoUseCase>();
+
         return services;
     }
 }

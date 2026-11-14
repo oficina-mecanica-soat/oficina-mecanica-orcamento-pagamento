@@ -53,7 +53,8 @@ public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
         var request = OrcamentoRequestBuilder.Novo();
         await using var contexto = _fixture.CriarDbContext();
         var repository = new OrcamentoRepository(contexto);
-        var integracao = new IntegracaoOrcamentoRepository(contexto);
+        var integracao = new ContextoIntegracaoOrcamentoStore(contexto);
+        var outbox = new SqlOutbox(contexto);
         var unitOfWork = new UnitOfWork(contexto);
         var orcamento = CriarOrcamento(request);
 
@@ -63,7 +64,7 @@ public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
             await repository.AdicionarAsync(orcamento, ct);
             await integracao.RegistrarContextoAsync(orcamento.Id, request.Contexto, ct);
             var invalida = ResultadosOrcamento.Gerado(orcamento, request.Contexto, TimeProvider.System) with { Tipo = new string('X', 65) };
-            await integracao.AdicionarResultadoAsync(invalida, 1, ct);
+            await outbox.AdicionarResultadoAsync(invalida, 1, ct);
         });
 
         // Assert
@@ -85,21 +86,21 @@ public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
         var r2 = new OrcamentoRepository(segundo);
         var aprovar = (await r1.ObterPorIdAsync(id))!;
         var cancelar = (await r2.ObterPorIdAsync(id))!;
-        var i1 = new IntegracaoOrcamentoRepository(primeiro);
-        var i2 = new IntegracaoOrcamentoRepository(segundo);
+        var outboxPrimeiro = new SqlOutbox(primeiro);
+        var outboxSegundo = new SqlOutbox(segundo);
 
         // Act
         aprovar.RegistrarDecisao(1, DecisaoOrcamento.Aprovado);
         await new UnitOfWork(primeiro).ExecutarEmTransacaoAsync(async ct =>
         {
             await r1.AtualizarAsync(aprovar, ct);
-            await i1.AdicionarResultadoAsync(ResultadosOrcamento.Decidido(aprovar, request.Contexto, TimeProvider.System), 1, ct);
+            await outboxPrimeiro.AdicionarResultadoAsync(ResultadosOrcamento.Decidido(aprovar, request.Contexto, TimeProvider.System), 1, ct);
         });
         cancelar.Cancelar(1, "Cancelamento concorrente");
         var salvarSegundo = () => new UnitOfWork(segundo).ExecutarEmTransacaoAsync(async ct =>
         {
             await r2.AtualizarAsync(cancelar, ct);
-            await i2.AdicionarResultadoAsync(ResultadosOrcamento.Cancelado(cancelar, request.Contexto, TimeProvider.System), 1, ct);
+            await outboxSegundo.AdicionarResultadoAsync(ResultadosOrcamento.Cancelado(cancelar, request.Contexto, TimeProvider.System), 1, ct);
         });
 
         // Assert
@@ -130,7 +131,7 @@ public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
 
         // Act
         await using var retomada = _fixture.CriarDbContext();
-        var contexto = await new IntegracaoOrcamentoRepository(retomada).ObterContextoAsync(id);
+        var contexto = await new ContextoIntegracaoOrcamentoStore(retomada).ObterContextoAsync(id);
         var registroRetomado = await retomada.Outbox.SingleAsync();
 
         // Assert
@@ -155,9 +156,10 @@ public sealed class OrcamentoPersistenciaTests : IAsyncLifetime
         var salvar = () => new UnitOfWork(segundo).ExecutarEmTransacaoAsync(async ct =>
         {
             await new OrcamentoRepository(segundo).AdicionarAsync(duplicado, ct);
-            var integracao = new IntegracaoOrcamentoRepository(segundo);
+            var integracao = new ContextoIntegracaoOrcamentoStore(segundo);
+            var outbox = new SqlOutbox(segundo);
             await integracao.RegistrarContextoAsync(duplicado.Id, request.Contexto, ct);
-            await integracao.AdicionarResultadoAsync(ResultadosOrcamento.Gerado(duplicado, request.Contexto, TimeProvider.System), 1, ct);
+            await outbox.AdicionarResultadoAsync(ResultadosOrcamento.Gerado(duplicado, request.Contexto, TimeProvider.System), 1, ct);
         });
 
         // Assert

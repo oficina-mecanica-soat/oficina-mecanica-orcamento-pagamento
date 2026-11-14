@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Mensagens.Contratos;
 using System.Text.Json;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
 namespace OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Orcamentos.Factories;

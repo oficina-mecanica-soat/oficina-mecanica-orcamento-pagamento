@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using AutoMapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -14,11 +15,15 @@ namespace OficinaMecanica.OrcamentoPagamento.Application.UnitTests.Orcamentos.Fa
 internal sealed class OrcamentoUseCaseTestDataFactory
 {
     public Mock<IOrcamentoRepository> Repository { get; } = new();
-    public Mock<IIntegracaoOrcamentoRepository> Integracao { get; } = new();
+    public Mock<IContextoIntegracaoOrcamentoStore> Integracao { get; } = new();
+    public Mock<IOutbox> Outbox { get; } = new();
     public Mock<IUnitOfWork> UnitOfWork { get; } = new();
     public Mock<IMapper> Mapper { get; } = new();
-    public Mock<ICancelamentoMensagemRepository> Cancelamentos { get; } = new();
-    public GerarOrcamentoRequest Request { get; } = new(Guid.NewGuid(), Guid.NewGuid(), 1,
+    public Mock<ICancelamentoMensagemStore> Cancelamentos { get; } = new();
+    public GerarOrcamentoRequest Request
+    {
+        get;
+    } = new(Guid.NewGuid(), Guid.NewGuid(), 1,
         new(Guid.NewGuid(), "correlacao-teste", Guid.NewGuid()),
         [new(Guid.NewGuid(), Guid.NewGuid(), "Serviço", 150m)], [new(Guid.NewGuid(), "Peça", 2, 45m)]);
 
@@ -40,6 +45,6 @@ internal sealed class OrcamentoUseCaseTestDataFactory
     }
 
     public GerarOrcamentoUseCase CriarGerarUseCase() =>
-        new(Repository.Object, Integracao.Object, UnitOfWork.Object, new GerarOrcamentoValidator(), Mapper.Object,
+        new(Repository.Object, Integracao.Object, Outbox.Object, UnitOfWork.Object, new GerarOrcamentoValidator(), Mapper.Object,
             TimeProvider.System, NullLogger<GerarOrcamentoUseCase>.Instance, Cancelamentos.Object);
 }

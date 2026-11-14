@@ -1,13 +1,19 @@
 using Microsoft.EntityFrameworkCore;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
 namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
-public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoRepository
+public sealed class ContextoIntegracaoOrcamentoStore : IContextoIntegracaoOrcamentoStore
 {
     private readonly OrcamentoPagamentoDbContext _dbContext;
-    public IntegracaoOrcamentoRepository(OrcamentoPagamentoDbContext dbContext) { _dbContext = dbContext; }
+
+    public ContextoIntegracaoOrcamentoStore(OrcamentoPagamentoDbContext dbContext)
+    {
+        _dbContext = dbContext;
+    }
 
     public async Task RegistrarContextoAsync(Guid orcamentoId, ContextoIntegracao contexto, CancellationToken cancellationToken = default)
     {
@@ -33,8 +39,4 @@ public sealed class IntegracaoOrcamentoRepository : IIntegracaoOrcamentoReposito
             contexto.TraceContext is null ? null : ContextoTrace.Filtrar(JsonContrato.Ler<Dictionary<string, string>>(contexto.TraceContext)));
     }
 
-    public async Task AdicionarResultadoAsync(MensagemIntegracao mensagem, int versaoNegocio, CancellationToken cancellationToken = default)
-    {
-        await _dbContext.Outbox.AddAsync(RegistroOutbox.Criar(mensagem, versaoNegocio), cancellationToken);
-    }
 }

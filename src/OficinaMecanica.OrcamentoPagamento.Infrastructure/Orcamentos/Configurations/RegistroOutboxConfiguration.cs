@@ -1,7 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
-namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Configurations;
 
 public sealed class RegistroOutboxConfiguration : IEntityTypeConfiguration<RegistroOutbox>
 {

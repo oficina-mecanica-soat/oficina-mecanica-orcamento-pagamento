@@ -1,6 +1,8 @@
-namespace OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
 
-public interface IRecebimentoMensagemRepository
+namespace OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
+
+public interface IInbox
 {
     Task ExecutarEmTransacaoAsync(Func<CancellationToken, Task> operacao, CancellationToken cancellationToken);
     Task<bool> VerificarRepeticaoAsync(Guid mensagemId, string chave, string hash, CancellationToken cancellationToken);

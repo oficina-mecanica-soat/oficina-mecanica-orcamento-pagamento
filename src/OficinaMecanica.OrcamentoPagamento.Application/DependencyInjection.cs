@@ -10,7 +10,7 @@ public static class DependencyInjection
         services.AddAutoMapper(_ => { }, typeof(DependencyInjection).Assembly);
         services.AddSingleton(TimeProvider.System);
         services.AddOrcamentosApplication();
-        services.AddScoped<Mensagens.ProcessadorMensagemOrcamento>();
+
         return services;
     }
 }

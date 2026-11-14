@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
+
 namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 
 public sealed class PublicadorOutbox
@@ -8,24 +10,41 @@ public sealed class PublicadorOutbox
     private readonly OrcamentoPagamentoDbContext _dbContext;
     private readonly ITransporteMensagem _transporte;
     private readonly TimeProvider _relogio;
-    public PublicadorOutbox(OrcamentoPagamentoDbContext dbContext, ITransporteMensagem transporte, TimeProvider relogio)
-    { _dbContext = dbContext; _transporte = transporte; _relogio = relogio; }
+
+    public PublicadorOutbox(
+        OrcamentoPagamentoDbContext dbContext,
+        ITransporteMensagem transporte,
+        TimeProvider relogio)
+    {
+        _dbContext = dbContext;
+        _transporte = transporte;
+        _relogio = relogio;
+    }
     public async Task<bool> PublicarProximaAsync(CancellationToken cancellationToken = default)
     {
         var agora = _relogio.GetUtcNow();
         var registros = _dbContext.Set<RegistroOutbox>();
         // Preservar a ordem pendente: não ultrapassar uma publicação ainda incerta.
         var pendente = await registros.AsNoTracking().Where(r => r.PublicadoEm == null).OrderBy(r => r.CriadoEm).ThenBy(r => r.Id).FirstOrDefaultAsync(cancellationToken);
-        if (pendente is null || pendente.LeaseAte > agora || pendente.ProximaTentativaEm > agora) { return false; }
+        if (pendente is null || pendente.LeaseAte > agora || pendente.ProximaTentativaEm > agora)
+        {
+            return false;
+        }
         var responsavel = Guid.NewGuid();
         var alterados = await registros.Where(r => r.Id == pendente.Id && r.PublicadoEm == null && (r.LeaseAte == null || r.LeaseAte <= agora))
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.Responsavel, responsavel).SetProperty(r => r.LeaseAte, agora.AddMinutes(1)), cancellationToken);
-        if (alterados == 0) { return false; }
+        if (alterados == 0)
+        {
+            return false;
+        }
         try
         {
             await _transporte.PublicarAsync("OrdemServico", pendente.Corpo, cancellationToken);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception)
         {
             var tentativa = pendente.Tentativas + 1;
