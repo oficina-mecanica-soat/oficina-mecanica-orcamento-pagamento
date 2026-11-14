@@ -35,3 +35,7 @@ override.tf.json
 **/source-commit.txt
 **/tfplan
 **/tfplan.sha256
+
+# Pacotes e contexto temporários da aplicação
+**/tfplan.bundle.enc
+**/aplicacao-destroy-context.json

@@ -1,6 +1,6 @@
 # Orçamento/Pagamento — Oficina Mecânica
 
-Serviço responsável por orçamentos versionados e, na evolução prevista, cobrança. A implementação em revisão gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio. O código é disponibilizado por PR para `develop`; não houve implantação AWS.
+Serviço responsável por orçamentos versionados e pagamentos da Oficina Mecânica. Gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio; cria checkout de teste e confirma pagamentos por consulta autenticada ao provedor.
 
 ## Arquitetura e referências
 
@@ -16,7 +16,7 @@ Não existem referências de projeto, consultas SQL, entidades compartilhadas ou
 - A geração repetida com o mesmo snapshot e Saga retorna o orçamento existente. Conteúdo ou Saga divergentes para a mesma OS/versão retornam conflito.
 - Aprovação e recusa só ocorrem enquanto o orçamento aguarda aprovação. Repetir a mesma decisão não produz outro resultado. Cancelar preserva o snapshot e eventual decisão anterior; repetir o cancelamento exige o mesmo motivo.
 - Orçamento, contexto de integração e resultado na outbox são gravados na mesma transação SQL. `rowversion` protege alterações concorrentes; índices únicos impedem versões e resultados duplicados.
-- Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação, causação e traceparent validado. O publicador local mantém corpo/ID após falhas e usa lease e backoff. **Ainda não há adaptador ou consumo SQS ativo.**
+- Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação, causação e traceparent validado. O publicador local mantém corpo/ID após falhas e usa lease e backoff. O adaptador SQS e os workers são ativados explicitamente na configuração; permanecem desligados por padrão.
 - O processador de comandos confirma recebimento, efeito e outbox em uma transação SQL. Reentregas compatíveis não duplicam efeitos; mesma identidade com conteúdo divergente é rejeitada. Cancelamento anterior à geração deixa um registro persistente que impede reabrir aquela versão, inclusive pelo caso de uso HTTP.
 
 O contexto da Saga é metadado de persistência/integração, sem dependência tecnológica no Domain. O total usa `decimal(18,2)`; valores inválidos, identificadores de serviço repetidos e totais que excedam esse limite são rejeitados antes da persistência.
@@ -147,11 +147,11 @@ dotnet format OficinaMecanica.OrcamentoPagamento.sln --verify-no-changes --no-re
 
 Os testes de integração exigem Docker e criam SQL Server descartável com Testcontainers. Validam migrations, persistência real, rollback da transação, concorrência, idempotência, JWT, permissões e restrição por cliente. Não precisam de AWS nem de credenciais reais.
 
-## Limites deste incremento
+## Processamento e garantias transacionais
 
 Os processadores aceitam geração/cancelamento de orçamento e criação de cobrança. A persistência de recebimentos, inclusive cancelamento antecipado, evita repetir efeitos locais. Os testes verificam falha após envio, retomada, rollback, concorrência e ligação por JSON com a Saga em bancos separados.
 
-Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local, derivado da referência do Execução, que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. O worker SQS depende da habilitação explícita descrita acima. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa; o worker cria um novo escopo em cada operação.
+Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. O worker SQS depende da habilitação explícita descrita acima. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa; o worker cria um novo escopo em cada operação.
 
 O runtime requer banco/usuário isolados, fila/DLQ e configuração de workload/Gateway fornecidos pelas esteiras correspondentes. O publicador conserva a ordem global das pendências; sua concorrência/política de falha não deve ser ampliada sem testes do transporte real. A instrumentação nativa do Datadog acompanha a implantação. Progresso, dependências e critérios de aceite ficam no backlog canônico da API.
 
@@ -159,7 +159,7 @@ Os testes do provedor substituto comprovam o comportamento local; não comprovam
 
 ### Rastreamento das mensagens
 
-A Infrastructure usa o SDK nativo Datadog 3.50.0, conforme a referência do Execução e a versão do profiler adotada na API. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
+A Infrastructure usa o SDK nativo Datadog 3.50.0, na mesma versão do profiler adotado na API principal. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
 
 A criação/exportação dos spans exige profiler e Agent compatíveis no workload. Os testes locais sem profiler verificam logs, restauração de escopos, filtragem e preservação do carrier; não comprovam ingestão Datadog ou rastreamento distribuído implantado. Não há OpenTelemetry ou novo Agent.
 
@@ -169,11 +169,11 @@ O Terraform em `infra/terraform/environments/dev` segue os recursos da API: entr
 
 Os contratos String são publicados em `/oficina-mecanica/development/orcamento-pagamento/{entrada_queue_url,entrada_queue_arn,dlq_url,dlq_arn}`. O parâmetro `/oficina-mecanica/development/status/orcamento-pagamento=ready` identifica somente essa infraestrutura, sem atestar banco, workload, processamento ou pagamento. Nenhuma credencial é publicada em SSM.
 
-A esteira exige `AWS_DEPLOY_ENABLED=true` no caller e no Environment, ref develop, Environment development e diretório dev. O merge mantém o bloqueio atual. State/cache são isolados por conta e ambiente; plano e artefatos incluem run_id/run_attempt, SHA-256 e vínculo com conta, região, commit e ação. Somente o plano salvo é aplicado, e o state resultante é preservado inclusive após falha parcial.
+A esteira exige `AWS_DEPLOY_ENABLED=true` no caller e no Environment, ref develop, Environment development e diretório dev. O merge mantém o bloqueio atual. State/cache são isolados por conta e ambiente e publicados somente em formato cifrado autenticado; plano e artefatos incluem run_id/run_attempt, SHA-256 e vínculo com conta, região, commit e ação. Somente o plano salvo é aplicado, e o state resultante é preservado inclusive após falha parcial.
 
 Sem cache, o primeiro ciclo exige destroy dedicado e consultas que comprovem ausência das filas e contratos deste owner. Não se descarta state nem se adota recurso órfão automaticamente. Um reset do laboratório pode remover as filas; ausência comprovada pode ser reconciliada, enquanto AccessDenied, token expirado ou resposta inválida bloqueiam.
 
-Destroy exige alteração explícita de `terraform-action.env`, confere novamente as pendências antes de aplicar e bloqueia enquanto o contrato do produtor OS existir. Entrada e DLQ precisam estar sem mensagens visíveis, em voo ou atrasadas; os contadores são aproximados e pressupõem produtores parados. Esse guardrail não consulta nem drena Outbox SQL. Após a remoção, a esteira confirma state sem recursos gerenciados e ausência real das filas e dos cinco parâmetros. Não há purge ou redrive automático.
+Destroy exige alteração explícita de `terraform-action.env`, confere novamente as pendências antes de aplicar e bloqueia enquanto o contrato do produtor OS existir. Entrada e DLQ precisam estar sem mensagens visíveis, em voo ou atrasadas; os contadores são aproximados e pressupõem produtores parados. Esse guardrail não consulta nem drena Outbox SQL. Após a remoção, a esteira confirma state sem recursos gerenciados e ausência real das filas, dos contratos e do namespace próprio. Não há purge ou redrive automático.
 
 Validação local sem AWS:
 
@@ -185,3 +185,28 @@ terraform -chdir=infra/terraform/environments/dev test
 ```
 
 Os testes operacionais ficam inline no CI e executam os mesmos guardrails do CD com respostas substitutas. Eles não comprovam permissões IAM, filas reais ou acesso pelo workload. `TERRAFORM_ACTION=destroy` deve permanecer até a janela autorizada; retorno a apply também pode disparar operação e exige revisão própria.
+
+## Implantação da aplicação
+
+O CD segue a API principal: resolve a ação, valida dependências, salva o plano, publica a mesma imagem aprovada pela CI, aplica exclusivamente esse plano e confere rollout/health. O build não é refeito durante o deploy: o conteúdo da imagem precisa corresponder à árvore Git integrada. A aplicação usa namespace próprio, Deployment, ConfigMap, Secret, Service NodePort e HPA. Recursos, probes e admissão Datadog seguem a API; não há novo Agent.
+
+O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamento` pertencem ao contrato RDS próprio. O CD exige os status de Kubernetes, RDS e banco isolado em ready, confere o registry da mesma conta/região e busca somente o secret exclusivo. Não utiliza master_secret_arn nem credencial da API. O startup aplica as migrations do serviço, como na API, com a permissão limitada ao banco próprio.
+
+| Configuração do Environment development | Uso |
+| --- | --- |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | Credenciais temporárias da janela AWS Academy |
+| `TERRAFORM_STATE_KEY` | Secret exclusivo com 64 caracteres hexadecimais, correspondente a 256 bits; proteger a cópia de recuperação |
+| `JWT_SECRET` | Mesma chave dos emissores autorizados; não gerar chave diferente por serviço |
+| `JWT_ISSUER`, `JWT_AUDIENCE` | Variables do contrato compartilhado; defaults oficina-mecanica-auth e oficina-mecanica-api |
+| `PROCESSAMENTO_REMOTO_ENABLED` | Variable false por padrão; true exige validar a fila FIFO real de resultados OS |
+| `MERCADO_PAGO_ATIVO` | Variable false por padrão; ativação exige os secrets e Variables da tabela Mercado Pago acima |
+
+O Environment permite somente a branch develop, como na API. `AWS_DEPLOY_ENABLED` e `AUTO_PR_ENABLED` permanecem sujeitos à autorização da janela. Habilitar uma opção funcional não habilita AWS. Homologation/production seguem os registros lógicos das esteiras existentes; nenhuma promoção é automática sem os gates, e nenhum workflow aprova PRs.
+
+O NodePort contratual do serviço é 30082, distinto da API; o ingresso privado e o roteamento público pertencem às esteiras Kubernetes/Gateway. O status `/oficina-mecanica/development/status/orcamento-pagamento-aplicacao` começa em implantacao-pendente, é invalidado antes de um novo apply e só vira ready após rollout da imagem esperada, conferência do Service e health HTTP privado. Filas prontas não substituem essa prova.
+
+Planos e states contêm material sensível do Secret Kubernetes. Antes de upload/cache, a esteira usa AES-256-GCM com nonce aleatório e autenticação do contexto (repositório, conta, ambiente; plano também inclui execução, tentativa e commit). A chave vem exclusivamente do Environment e não é fornecida ao CI de PR. Só o pacote cifrado do plano e os states cifrados são publicados. Chave incorreta, arquivo alterado ou contexto divergente bloqueiam a restauração, sem assumir state vazio.
+
+Não rotacionar essa chave sem procedimento de migração e recuperação: ela é necessária para ler os caches. O prefixo enc-v1 não importa automaticamente caches antigos sem proteção. Se existir state anterior, preserve-o e faça migração revisada; ausência de cache não autoriza adotar ou destruir recursos órfãos. A solução atual contém o risco do cache; backend remoto protegido e durável continua sendo evolução registrada no backlog. Referências: [restrições de acesso ao cache do Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) e [criptografia autenticada do Node.js](https://nodejs.org/api/crypto.html).
+
+No destroy, a esteira exige primeiro a remoção do Gateway e do produtor OS, além das filas sem pendências. Remove somente os recursos próprios. Se um reset já removeu o EKS, a ausência precisa ser confirmada antes da recuperação declarativa dos vínculos Kubernetes; AccessDenied bloqueia. A exclusão do workload não remove banco ou login, cujo ciclo de vida pertence ao RDS. Provas locais/mocks não comprovam IAM, RBAC, rede, FIFO/DLQ, pagamento ou ingestão Datadog no laboratório.
