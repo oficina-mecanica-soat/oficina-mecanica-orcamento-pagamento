@@ -340,6 +340,204 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
+  validate_terraform:
+    name: "🌐 05.1 · Validar infraestrutura de mensageria"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TF_WORKING_DIRECTORY: infra/terraform/environments/dev
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Instalar Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: "🧪 03 · Testar os guardrails reais sem AWS"
+        run: |
+          node <<'PREPARAR_TESTES_MENSAGERIA'
+          const fs = require('node:fs'), path = require('node:path');
+          const origem = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r\n/g, '\n');
+          const bloco = origem.match(/          cat > "\u0024RUNNER_TEMP\/mensageria-orcamento.cjs" <<'VALIDAR_MENSAGERIA'\n([\s\S]*?)          VALIDAR_MENSAGERIA/);
+          if (!bloco) throw new Error('Validações reais da mensageria ausentes.');
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'mensageria-orcamento.cjs'), bloco[1].split('\n').map(l => l.slice(10)).join('\n'));
+          PREPARAR_TESTES_MENSAGERIA
+          cat > "$RUNNER_TEMP/mensageria-orcamento.test.cjs" <<'TESTE_MENSAGERIA'
+          const { test } = require('node:test');
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const os = require('node:os');
+          const cp = require('node:child_process');
+          const h = require('./mensageria-orcamento.cjs');
+          const conta = '123456789012', regiao = 'us-east-1', ambiente = 'development';
+          const n = h.nomes(ambiente);
+          const c = {
+            entrada_queue_url: 'https://sqs.us-east-1.amazonaws.com/' + conta + '/' + n.fila + '.fifo',
+            entrada_queue_arn: 'arn:aws:sqs:us-east-1:' + conta + ':' + n.fila + '.fifo',
+            dlq_url: 'https://sqs.us-east-1.amazonaws.com/' + conta + '/' + n.fila + '-dlq.fifo',
+            dlq_arn: 'arn:aws:sqs:us-east-1:' + conta + ':' + n.fila + '-dlq.fifo'
+          };
+          function state() {
+            return { resources: [
+              { mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_entrada', instances: [{ attributes: { id: c.entrada_queue_url, arn: c.entrada_queue_arn } }] },
+              { mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_dlq', instances: [{ attributes: { id: c.dlq_url, arn: c.dlq_arn } }] },
+              { mode: 'managed', type: 'aws_sqs_queue_redrive_allow_policy', name: 'orcamento_pagamento_dlq', instances: [{ attributes: { queue_url: c.dlq_url } }] },
+              { mode: 'managed', type: 'aws_ssm_parameter', name: 'orcamento_pagamento_mensageria', instances: Object.keys(c).map(k => ({ attributes: { name: n.prefixo + '/' + k, arn: 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + n.prefixo + '/' + k } })) }
+            ] };
+          }
+          const vazio = () => null;
+          function awsInfra(...args) {
+            if (args[0] === 'ssm') {
+              const nome = args[args.indexOf('--name') + 1];
+              return { Parameter: { Type: 'String', Value: nome === n.status ? 'ready' : c[nome.split('/').pop()] } };
+            }
+            const dlq = args.includes(c.dlq_url);
+            return { Attributes: {
+              QueueArn: dlq ? c.dlq_arn : c.entrada_queue_arn, FifoQueue: 'true', ContentBasedDeduplication: 'false', SqsManagedSseEnabled: 'true',
+              MessageRetentionPeriod: dlq ? '1209600' : '345600', VisibilityTimeout: '60', ReceiveMessageWaitTimeSeconds: '20',
+              RedrivePolicy: JSON.stringify({ maxReceiveCount: 5, deadLetterTargetArn: c.dlq_arn }),
+              RedriveAllowPolicy: JSON.stringify({ redrivePermission: 'byQueue', sourceQueueArns: [c.entrada_queue_arn] })
+            } };
+          }
+          test('state preserva conta, região, owner e nomes dos recursos', () => {
+            h.validarState(state(), conta, regiao, ambiente);
+            assert.deepEqual(h.contratos(state()), c);
+            for (const outraConta of ['000000000000', 'outra']) assert.throws(() => h.validarState(state(), outraConta, regiao, ambiente));
+            assert.throws(() => h.validarState(state(), conta, 'us-west-2', ambiente));
+            assert.throws(() => h.nomes('production'));
+            for (const alterar of [s => s.resources[0].name = 'outro_owner', s => s.resources[0].type = 'aws_db_instance', s => s.resources[0].mode = 'data', s => s.resources[0].module = 'module.outra', s => s.resources[3].instances[0].attributes.name = '/segredo/outro']) {
+              const s = state(); alterar(s); assert.throws(() => h.validarState(s, conta, regiao, ambiente));
+            }
+            assert.throws(() => h.validarState({}, conta, regiao, ambiente));
+          });
+          test('bootstrap só aceita inventário vazio do owner e respostas válidas', () => {
+            const aws = (...args) => args[1] === 'describe-parameters' ? { Parameters: [] } : null;
+            h.verificarVazio(ambiente, aws);
+            assert.throws(() => h.verificarVazio(ambiente, () => ({ QueueUrl: c.entrada_queue_url })));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a[1] === 'describe-parameters' ? {} : null));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a[1] === 'describe-parameters' ? { Parameters: [{ Name: n.prefixo + '/entrada_queue_url' }] } : null));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a.includes(n.status) ? { Parameter: {} } : aws(...a)));
+          });
+          test('ausência exige código específico, nunca AccessDenied ou erro de rede', () => {
+            assert.equal(h.ausente(['sqs'], { stderr: '(QueueDoesNotExist)' }), true);
+            assert.equal(h.ausente(['ssm'], { stderr: '(ParameterNotFound)' }), true);
+            for (const stderr of ['AccessDenied', 'ExpiredToken', 'timeout', '(ParameterNotFound)']) assert.equal(h.ausente(['sqs'], { stderr }), false);
+          });
+          test('destroy exige produtor removido e filas sem mensagens de qualquer categoria', () => {
+            const aws = (...args) => args[0] === 'ssm' ? null : { Attributes: { ApproximateNumberOfMessages: '0', ApproximateNumberOfMessagesNotVisible: '0', ApproximateNumberOfMessagesDelayed: '0' } };
+            h.pendencias(c, ambiente, aws);
+            h.pendencias(c, ambiente, vazio);
+            assert.throws(() => h.pendencias(c, ambiente, () => ({ Parameter: { Value: 'ready' } })));
+            for (const campo of ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'ApproximateNumberOfMessagesDelayed']) {
+              for (const valor of ['1', '-1', '', undefined, 0, 'não-numérico']) {
+                assert.throws(() => h.pendencias(c, ambiente, (...args) => args[0] === 'ssm' ? null : { Attributes: { ...aws(...args).Attributes, [campo]: valor } }));
+              }
+            }
+            assert.throws(() => h.pendencias({ ...c, dlq_url: '' }, ambiente, aws));
+          });
+          test('após apply confere FIFO, SSE, redrive e todos os contratos SSM', () => {
+            h.verificarInfra(c, ambiente, awsInfra);
+            for (const alterar of [a => a.FifoQueue = 'false', a => a.SqsManagedSseEnabled = 'false', a => a.VisibilityTimeout = '1', a => a.RedrivePolicy = '{}', a => a.RedriveAllowPolicy = '{}', a => a.QueueArn = 'arn-outro']) {
+              assert.throws(() => h.verificarInfra(c, ambiente, (...args) => {
+                const r = awsInfra(...args); if (r.Attributes) alterar(r.Attributes); return r;
+              }));
+            }
+            for (const campo of ['Type', 'Value']) assert.throws(() => h.verificarInfra(c, ambiente, (...args) => {
+              const r = awsInfra(...args); if (r.Parameter) r.Parameter[campo] = 'divergente'; return r;
+            }));
+          });
+          test('remoção confirma filas e SSM; falha de consulta continua bloqueando', () => {
+            h.verificarRemocao(c, ambiente, vazio);
+            assert.throws(() => h.verificarRemocao(c, ambiente, () => ({})));
+            assert.throws(() => h.verificarRemocao(c, ambiente, () => { throw Error('AccessDenied'); }));
+          });
+          test('plano proíbe outros owners, substituição no apply e criação no destroy', () => {
+            const plano = acoes => ({ format_version: '1.2', planned_values: {}, resource_changes: [{ mode: 'managed', type: 'aws_sqs_queue', change: { actions: acoes } }] });
+            h.validarPlano(plano(['create']), 'apply');
+            h.validarPlano(plano(['update']), 'apply');
+            h.validarPlano(plano(['delete']), 'destroy');
+            h.validarPlano({ format_version: '1.2', planned_values: {} }, 'destroy');
+            for (const acoes of [[], ['create'], ['update'], ['delete', 'create'], ['forget']]) assert.throws(() => h.validarPlano(plano(acoes), 'destroy'));
+            for (const acoes of [['delete'], ['delete', 'create'], []]) assert.throws(() => h.validarPlano(plano(acoes), 'apply'));
+            const outro = plano(['create']); outro.resource_changes[0].type = 'aws_iam_role'; assert.throws(() => h.validarPlano(outro, 'apply'));
+            assert.throws(() => h.validarPlano({}, 'apply'));
+          });
+          const deploy = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r\n/g, '\n');
+          const cd = fs.readFileSync('.github/workflows/cd-development.yml', 'utf8');
+          const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+          test('barreira real bloqueia flags, refs e ambientes indevidos antes de AWS', () => {
+            const bloco = deploy.match(/      - name: "🛡️ Conferir habilitação do deploy AWS"\n([\s\S]*?)(?=      - name:)/)[1];
+            const gates = [...deploy.matchAll(/      - name: "🛡️ Conferir habilitação do deploy AWS"\n([\s\S]*?)(?=      - name:)/g)].map(m => m[1].split('        run: |\n')[1].trim());
+            assert.equal(gates.length, 3);
+            assert(gates.every(g => g === gates[0]), 'Todos os jobs operacionais devem repetir a mesma barreira.');
+            const script = bloco.split('        run: |\n')[1].split('\n').map(l => l.slice(10)).join('\n').trim();
+            const env = { ...process.env, DEPLOY_ENABLED: 'true', GITHUB_REF: 'refs/heads/develop', DEPLOY_ENVIRONMENT: 'development', TF_ENVIRONMENT: 'dev', SSM_ENVIRONMENT_NAME: 'development' };
+            const run = alteracoes => cp.spawnSync(bash, ['-e', '-c', script], { env: { ...env, ...alteracoes }, encoding: 'utf8' });
+            assert.equal(run({}).status, 0);
+            for (const DEPLOY_ENABLED of ['', 'false', 'TRUE', 'true ']) assert.notEqual(run({ DEPLOY_ENABLED }).status, 0);
+            for (const [k,v] of [['GITHUB_REF','refs/heads/main'], ['GITHUB_REF','refs/tags/v1'], ['DEPLOY_ENVIRONMENT','production'], ['TF_ENVIRONMENT','../dev'], ['SSM_ENVIRONMENT_NAME','homologation']]) assert.notEqual(run({ [k]:v }).status, 0);
+            assert(cd.includes("vars.AWS_DEPLOY_ENABLED == 'true'"));
+            assert(!cd.includes('open-pr-to-release'), 'Mensageria sozinha não pode promover a aplicação.');
+          });
+          test('resolver real exige ação válida e alteração explícita para destroy', () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oficina-testar-acao-'));
+            assert(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep));
+            try {
+              const git = args => cp.execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
+              git(['init','-q']); git(['config','user.name','Teste local']); git(['config','user.email','teste@example.invalid']);
+              const infra = path.join(dir, 'infra/terraform/environments/dev'); fs.mkdirSync(infra, { recursive: true });
+              const control = path.join(infra, 'terraform-action.env');
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=destroy\n'); git(['add','.']); git(['commit','-qm','base']); const base = git(['rev-parse','HEAD']);
+              const bloco = deploy.match(/      - name: "🚦 02 · Ler ação e exigir destroy dedicado"\n([\s\S]*?)(?=  prepare_and_plan:)/)[1];
+              const script = bloco.split('        run: |\n')[1].split('\n').map(l => l.slice(10)).join('\n').trim();
+              const executar = anterior => cp.spawnSync(bash, ['-e','-c',script], { cwd: dir, encoding: 'utf8', env: { ...process.env, TF_WORKING_DIRECTORY:'infra/terraform/environments/dev', GITHUB_BEFORE: anterior, GITHUB_SHA: git(['rev-parse','HEAD']), GITHUB_OUTPUT: path.join(dir,'output') } });
+              assert.notEqual(executar(base).status, 0);
+              fs.appendFileSync(control, '# destroy dedicado\n'); git(['add','.']); git(['commit','-qm','destroy dedicado']);
+              assert.equal(executar(base).status, 0);
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=apply\n'); assert.equal(executar(base).status, 0);
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=outro\n'); assert.notEqual(executar(base).status, 0);
+            } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+          });
+          test('artefatos usam tentativa e commit; state parcial é preservado', () => {
+            const nomes = [...deploy.matchAll(/name: (tfplan-orcamento-pagamento-[^\n]+)/g)].map(m => m[1]);
+            assert.equal(nomes.length, 2); assert.equal(nomes[0], nomes[1]);
+            assert(nomes.every(n => n.includes('github.run_id') && n.includes('github.run_attempt')));
+            assert(deploy.includes('sha256sum -c tfplan.sha256'));
+            assert(deploy.includes('source-commit.txt'));
+            assert(deploy.includes("if: always() && steps.apply.outcome != 'skipped'"));
+            assert(!deploy.includes('restore-keys: tfstate-'));
+            assert(!deploy.includes('docker push'));
+            assert(!deploy.includes('terraform destroy'));
+          });
+
+          test('plano salvo permanece vinculado a conta, região, ambiente, ação e commit', () => {
+            const esperado = { conta, regiao, ambiente, acao: 'apply', commit: 'a'.repeat(40) };
+            h.validarContextoPlano({ ...esperado }, esperado);
+            for (const campo of Object.keys(esperado)) assert.throws(() => h.validarContextoPlano({ ...esperado, [campo]: 'divergente' }, esperado));
+            assert.throws(() => h.validarContextoPlano({}, esperado));
+            assert.throws(() => h.validarContextoPlano({ ...esperado, extra: 'não permitido' }, esperado));
+          });
+
+          TESTE_MENSAGERIA
+          node --test "$RUNNER_TEMP/mensageria-orcamento.test.cjs"
+
+      - name: "🎨 04 · Verificar formatação Terraform"
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: "🚀 05 · Inicializar Terraform sem backend"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" init -backend=false -input=false
+
+      - name: "🔍 06 · Validar configuração Terraform"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" validate
+
+      - name: "🧪 07 · Validar planos com providers simulados"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" test
+
   quality_gate:
     name: "🚦 06 · Quality gate"
     runs-on: ubuntu-latest
@@ -350,6 +548,7 @@ jobs:
       - verify_code_style
       - test_application
       - build_container_image
+      - validate_terraform
     if: always()
 
     steps:
@@ -375,6 +574,7 @@ jobs:
             "${{ needs.verify_code_style.result }}"
             "${{ needs.test_application.result }}"
             "${{ needs.build_container_image.result }}"
+            "${{ needs.validate_terraform.result }}"
           )
 
           for result in "${results[@]}"; do
