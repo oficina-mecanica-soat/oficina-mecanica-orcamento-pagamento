@@ -457,7 +457,7 @@ jobs:
             assert.throws(() => h.verificarRemocao(c, ambiente, () => { throw Error('AccessDenied'); }));
           });
           test('plano proíbe outros owners, substituição no apply e criação no destroy', () => {
-            const plano = acoes => ({ format_version: '1.2', planned_values: {}, resource_changes: [{ mode: 'managed', type: 'aws_sqs_queue', change: { actions: acoes } }] });
+            const plano = acoes => ({ format_version: '1.2', planned_values: {}, resource_changes: [{ mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_entrada', change: { actions: acoes, after: { name: n.fila + '.fifo' } } }] });
             h.validarPlano(plano(['create']), 'apply');
             h.validarPlano(plano(['update']), 'apply');
             h.validarPlano(plano(['delete']), 'destroy');
@@ -465,6 +465,8 @@ jobs:
             for (const acoes of [[], ['create'], ['update'], ['delete', 'create'], ['forget']]) assert.throws(() => h.validarPlano(plano(acoes), 'destroy'));
             for (const acoes of [['delete'], ['delete', 'create'], []]) assert.throws(() => h.validarPlano(plano(acoes), 'apply'));
             const outro = plano(['create']); outro.resource_changes[0].type = 'aws_iam_role'; assert.throws(() => h.validarPlano(outro, 'apply'));
+            const filaAlheia = plano(['create']); filaAlheia.resource_changes[0].change.after.name = 'fila-outro-owner.fifo'; assert.throws(() => h.validarPlano(filaAlheia, 'apply'));
+            const parametroAlheio = plano(['create']); Object.assign(parametroAlheio.resource_changes[0], { type: 'aws_ssm_parameter', name: 'orcamento_pagamento_mensageria' }); parametroAlheio.resource_changes[0].change.after.name = '/outro-owner/token'; assert.throws(() => h.validarPlano(parametroAlheio, 'apply'));
             assert.throws(() => h.validarPlano({}, 'apply'));
           });
           const deploy = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r\n/g, '\n');

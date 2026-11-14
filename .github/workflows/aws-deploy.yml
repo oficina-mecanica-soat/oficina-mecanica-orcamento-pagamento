@@ -191,11 +191,17 @@ jobs:
             const n = nomes(ambiente);
             for (const nome of [n.status, ...chaves.map(k => n.prefixo + '/' + k)]) if (aws('ssm', 'get-parameter', '--name', nome) !== null) throw new Error('Parâmetro ainda existe após destroy.');
           }
-          function validarPlano(plano, acao) {
+          function validarPlano(plano, acao, ambiente = "development") {
+            const n = nomes(ambiente);
             if (!['apply', 'destroy'].includes(acao) || typeof plano.format_version !== 'string' || !plano.planned_values || (plano.resource_changes !== undefined && !Array.isArray(plano.resource_changes))) throw new Error('Plano ou ação inválidos.');
             for (const r of plano.resource_changes || []) {
               if (r.mode === 'data') throw new Error('Mensageria não deve depender de data source de outro owner.');
               if (r.module_address || !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)) throw new Error('Plano contém infraestrutura fora do owner.');
+              const nomesRecursos = { aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'], aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'], aws_ssm_parameter: ['orcamento_pagamento_mensageria', 'orcamento_pagamento_mensageria_status'] };
+              if (!nomesRecursos[r.type]?.includes(r.name)) throw new Error('Plano contém recurso desconhecido.');
+              const atributos = r.change?.after || r.change?.before || {};
+              if (r.type === 'aws_sqs_queue' && ![n.fila + '.fifo', n.fila + '-dlq.fifo'].includes(atributos.name)) throw new Error('Plano contém fila de outro owner.');
+              if (r.type === 'aws_ssm_parameter' && ![n.status, ...chaves.map(k => n.prefixo + '/' + k)].includes(atributos.name)) throw new Error('Plano contém parâmetro de outro owner.');
               const acoes = r.change?.actions;
               if (!Array.isArray(acoes) || acoes.length === 0 || acoes.some(a => !['no-op', 'delete', 'create', 'update', 'read'].includes(a))) throw new Error('Ações de plano inválidas.');
               if (acao === 'destroy' && acoes.some(a => !['no-op', 'delete', 'read'].includes(a))) throw new Error('Destroy não pode criar ou atualizar recursos.');
@@ -230,7 +236,7 @@ jobs:
               verificarRemocao(JSON.parse(fs.readFileSync(path.join(dir, 'mensageria-destroy-context.json'), 'utf8')), ambiente, consultar);
             } else if (modo === 'plan') {
               const plano = JSON.parse(cp.execFileSync('terraform', ['-chdir=' + dir, 'show', '-json', 'tfplan'], { encoding: 'utf8' }));
-              validarPlano(plano, process.env.TERRAFORM_ACTION);
+              validarPlano(plano, process.env.TERRAFORM_ACTION, ambiente);
               const contextoPlano = { conta, regiao: process.env.AWS_REGION, ambiente, acao: process.env.TERRAFORM_ACTION, commit: process.env.GITHUB_SHA };
               const arquivoPlano = path.join(dir, 'plan-context.json');
               if (process.argv[3] === 'verify-context') validarContextoPlano(JSON.parse(fs.readFileSync(arquivoPlano, 'utf8')), contextoPlano);
