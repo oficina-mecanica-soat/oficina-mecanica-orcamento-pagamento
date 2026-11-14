@@ -1,12 +1,12 @@
-using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using OficinaMecanica.OrcamentoPagamento.Application.Common;
-using OficinaMecanica.OrcamentoPagamento.Application.Mensagens;
+using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Mensagens;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Orcamentos.Repositories;
+using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Persistence;
 
 namespace OficinaMecanica.OrcamentoPagamento.Infrastructure;
@@ -27,6 +27,8 @@ public static class DependencyInjection
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped<IInbox, SqlInbox>();
         services.AddScoped<ICancelamentoMensagemStore, CancelamentoMensagemStore>();
+        services.AddPagamentosInfrastructure(configuration);
+
         return services;
     }
 }

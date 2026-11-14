@@ -30,6 +30,11 @@ services:
       Jwt__Secret: ${OFICINA_MECANICA_JWT_SECRET:?Configure OFICINA_MECANICA_JWT_SECRET no arquivo .env.}
       DD_SERVICE: oficina-mecanica-orcamento-pagamento
       DD_ENV: development
+      MercadoPago__Ativo: ${MERCADO_PAGO_ATIVO:-false}
+      MercadoPago__AccessToken: ${MERCADO_PAGO_ACCESS_TOKEN:-}
+      MercadoPago__WebhookSecret: ${MERCADO_PAGO_WEBHOOK_SECRET:-}
+      MercadoPago__RecebedorId: ${MERCADO_PAGO_RECEBEDOR_ID:-0}
+      MercadoPago__UrlNotificacao: ${MERCADO_PAGO_URL_NOTIFICACAO:-}
     ports:
       - "5095:8080"
 volumes:
