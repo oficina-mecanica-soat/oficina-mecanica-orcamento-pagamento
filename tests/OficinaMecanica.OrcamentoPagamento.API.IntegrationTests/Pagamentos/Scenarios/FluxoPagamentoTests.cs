@@ -17,7 +17,6 @@ using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.Exceptions;
 using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.PagamentoUseCases.ConferirPagamento;
 using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.PagamentoUseCases.DetalharPagamento;
-using OficinaMecanica.OrcamentoPagamento.Application.Pagamentos.PagamentoUseCases.ProcessarMensagemPagamento;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Enums;
 using OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Enums;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure;
@@ -74,7 +73,7 @@ public sealed class FluxoPagamentoTests : IAsyncLifetime
     {
         await using var services = CriarServicos();
         await using var scope = services.CreateAsyncScope();
-        await scope.ServiceProvider.GetRequiredService<ProcessarMensagemPagamentoUseCase>().ExecuteAsync(JsonContrato.Serializar(mensagem));
+        await scope.ServiceProvider.GetRequiredService<OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces.IProcessadorMensagem>().ProcessarAsync(JsonContrato.Serializar(mensagem));
     }
 
     private async Task ConferirAsync(StatusPagamentoProvedor status, string identificador = "123", decimal valor = 240m, Guid? referencia = null)

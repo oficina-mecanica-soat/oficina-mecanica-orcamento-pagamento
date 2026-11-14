@@ -10,6 +10,7 @@ builder.AddApiObservability();
 builder.Services.AddApi(builder.Configuration);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+using var clientesAws = await builder.AddApiProcessingAsync();
 
 var app = builder.Build();
 if (builder.Configuration.GetValue<bool>("Database:ApplyMigrationsOnStartup"))

@@ -29,7 +29,7 @@ public sealed class MensagensOrcamentoTests(OrcamentoPagamentoApiFixture fixture
     {
         await using var servicos = CriarServicos();
         await using var scope = servicos.CreateAsyncScope();
-        await scope.ServiceProvider.GetRequiredService<ProcessarMensagemOrcamentoUseCase>().ExecuteAsync(JsonContrato.Serializar(mensagem));
+        await scope.ServiceProvider.GetRequiredService<IProcessadorMensagem>().ProcessarAsync(JsonContrato.Serializar(mensagem));
     }
     [Fact]
     public async Task Dado_ReentregasAposReinicio_Quando_Processar_Entao_DevePreservarSnapshotEventoETraceOriginal()

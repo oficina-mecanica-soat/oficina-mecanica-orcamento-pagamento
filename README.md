@@ -122,6 +122,16 @@ A intenção de cobrança é confirmada no SQL antes do POST externo. A referên
 
 Somente a aprovação confirmada pelo provedor gera `PagamentoConfirmado` junto da alteração local, via Outbox. Recusa não impede outra tentativa aprovada; eventos atrasados não regridem a confirmação. Estorno, contestação e estados desconhecidos exigem conciliação manual. Um orçamento com cobrança solicitada não pode ser compensado por cancelamento.
 
+## Processamento de mensagens
+
+`ProcessamentoRemoto:Habilitado` é `false` por padrão. Nesse modo, o host não cria clientes AWS nem inicia workers. Os processadores continuam disponíveis para testes e composição local por arquivos.
+
+O workload remoto recebe da esteira oficial `ProcessamentoRemoto:ContaEsperada`, `Regiao`, `FilaEntradaUrl` e `FilaResultadosOsUrl`. As duas filas devem ser FIFO, distintas e pertencer à conta/região informadas. A identidade é obtida explicitamente da `LabRole` do workload e conferida por STS; não usa credenciais de ambiente ou perfis locais como fallback. A configuração remota deve ser ativada somente na implantação autorizada pela esteira.
+
+O consumidor usa long polling de 20 segundos, uma mensagem por vez e visibilidade de 60 segundos, renovada a cada 20 segundos. Confere os metadados FIFO contra o envelope e exclui a entrada somente após o caso de uso concluir. Falhas de contrato, persistência, conciliação ou renovação preservam a possibilidade de reentrega. Mensagens não reconhecidas não são confirmadas; redrive/DLQ pertencem à infraestrutura da fila.
+
+O publicador trabalha em um loop separado, para que a espera do consumidor não impeça o envio da Outbox. As tentativas preservam `mensagemId` e o agrupamento por OS. O SDK usa timeout de 30 segundos e não repete requisições internamente; Inbox/Outbox e o worker controlam a recuperação. Os testes com SDK substituído e SQL real não comprovam FIFO/DLQ/IAM ou entrega em AWS.
+
 ## Validar
 
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
@@ -139,10 +149,10 @@ Os testes de integração exigem Docker e criam SQL Server descartável com Test
 
 ## Limites deste incremento
 
-O serviço permanece em andamento. O núcleo de mensagens já processa geração/cancelamento e grava recebimentos, inclusive cancelamento antecipado; a ligação local com a Saga foi validada por JSON e bancos separados. Os testes também verificam falha após envio, retomada e publicadores concorrentes.
+Os processadores aceitam geração/cancelamento de orçamento e criação de cobrança. A persistência de recebimentos, inclusive cancelamento antecipado, evita repetir efeitos locais. Os testes verificam falha após envio, retomada, rollback, concorrência e ligação por JSON com a Saga em bancos separados.
 
-Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local, derivado da referência do Execução, que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. Não existe worker automático habilitado no host, nem configuração que acione AWS neste incremento. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa.
+Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local, derivado da referência do Execução, que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. O worker SQS depende da habilitação explícita descrita acima. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa; o worker cria um novo escopo em cada operação.
 
-Estão pendentes: adaptador/worker SQS e validação de FIFO/DLQ/visibilidade/IAM; ativação do fluxo nas rotas de OS e corte do ownership; CI/CD e governança do novo repositório derivados das esteiras existentes; SQL/usuário isolados no RDS, fila/DLQ e integração Kubernetes/Gateway. O publicador local conserva a ordem global das pendências e só pode ter sua concorrência/política de falha ampliada com os testes do transporte real. A instrumentação nativa do Datadog precisa acompanhar o futuro deploy.
+O runtime requer banco/usuário isolados, fila/DLQ e configuração de workload/Gateway fornecidos pelas esteiras correspondentes. O publicador conserva a ordem global das pendências; sua concorrência/política de falha não deve ser ampliada sem testes do transporte real. A instrumentação nativa do Datadog acompanha a implantação. Progresso, dependências e critérios de aceite ficam no backlog canônico da API.
 
 Os testes do provedor substituto comprovam o comportamento local; não comprovam checkout ou Webhook reais do Mercado Pago. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.
