@@ -183,7 +183,7 @@ public sealed class OrcamentoUseCasesTests
         var orcamento = dados.CriarOrcamento();
         dados.Repository.Setup(r => r.ObterPorIdAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(orcamento);
         dados.Integracao.Setup(i => i.ObterContextoAsync(orcamento.Id, It.IsAny<CancellationToken>())).ReturnsAsync(dados.Request.Contexto);
-        var useCase = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
+        var useCase = new CancelarOrcamentoUseCase(dados.Repository.Object, Mock.Of<OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Interfaces.IPagamentoRepository>(), dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new CancelarOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<CancelarOrcamentoUseCase>.Instance);
         var request = new CancelarOrcamentoRequest(orcamento.Id, 1, Guid.NewGuid(), "Recusa");
 
@@ -204,7 +204,7 @@ public sealed class OrcamentoUseCasesTests
         var detalhar = new DetalharOrcamentoUseCase(dados.Repository.Object, new DetalharOrcamentoValidator(), dados.Mapper.Object);
         var decidir = new RegistrarDecisaoOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new RegistrarDecisaoOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<RegistrarDecisaoOrcamentoUseCase>.Instance);
-        var cancelar = new CancelarOrcamentoUseCase(dados.Repository.Object, dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
+        var cancelar = new CancelarOrcamentoUseCase(dados.Repository.Object, Mock.Of<OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Interfaces.IPagamentoRepository>(), dados.Integracao.Object, dados.Outbox.Object, dados.UnitOfWork.Object,
             new CancelarOrcamentoValidator(), dados.Mapper.Object, TimeProvider.System, NullLogger<CancelarOrcamentoUseCase>.Instance);
 
         // Act / Assert

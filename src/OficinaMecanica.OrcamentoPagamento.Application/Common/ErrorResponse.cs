@@ -10,7 +10,8 @@ public enum TipoErro
     NaoAutorizado = 4,
     ErroInterno = 5,
     AcessoProibido = 6,
-    Conflito = 7
+    Conflito = 7,
+    Indisponivel = 8
 }
 
 public sealed record ErrorResponse(string Mensagem, TipoErro Tipo, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyCollection<string>? Erros = null);

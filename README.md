@@ -109,6 +109,19 @@ Exemplo de geração administrativa; substitua os UUIDs pelos identificadores da
 
 Decisão: `{"versao":1,"decisao":1,"operacaoId":"88888888-8888-8888-8888-888888888888"}`; `1` aprova e `2` recusa. Cancelamento: `{"versao":1,"operacaoId":"99999999-9999-9999-9999-999999999999","motivo":"Solicitação cancelada"}`. O cliente não informa sua identidade no corpo da decisão.
 
+## Pagamentos
+
+A cobrança é solicitada internamente pelo comando `CriarCobranca`, após a finalização física confirmada pela Saga de OS. O valor e o cliente são obtidos do orçamento aprovado no banco deste serviço. Não existe endpoint público para criar cobranças.
+
+- `GET /api/v1/pagamentos/{pagamentoId}`: consulta local com JWT, disponível para administrador/atendente ou para o cliente proprietário. Um cliente não consulta pagamentos de outro cliente. Após confirmação, a resposta deixa de oferecer o endereço do checkout.
+- `POST /api/v1/pagamentos/notificacoes/mercado-pago?data.id={identificador}`: Webhook sem JWT, autenticado por `x-signature` e `x-request-id`. Configure notificações do tipo `payment`; o `data.id` do corpo precisa corresponder à query. O estado financeiro é consultado no provedor, nunca aceito do corpo da notificação. O sucesso retorna 200 sem dados financeiros; indisponibilidade do provedor retorna 503 para permitir reentrega.
+
+Configure `MercadoPago:UrlNotificacao` com o endereço HTTPS público desse Webhook. Os demais parâmetros e o bloqueio padrão da integração estão descritos na configuração do Mercado Pago deste README. Migrations pertencem exclusivamente ao banco Orçamento/Pagamento.
+
+A intenção de cobrança é confirmada no SQL antes do POST externo. A referência externa é o UUID local do pagamento. Após resultado incerto, repetições pesquisam a preferência pela referência; não repetem automaticamente a criação. Uma intenção em `CriacaoEmAndamento` sem preferência encontrada exige conciliação operacional, inclusive se houve interrupção entre confirmar a intenção e enviar o POST. Não reabrir a criação nem alterar o banco manualmente para forçar uma segunda tentativa.
+
+Somente a aprovação confirmada pelo provedor gera `PagamentoConfirmado` junto da alteração local, via Outbox. Recusa não impede outra tentativa aprovada; eventos atrasados não regridem a confirmação. Estorno, contestação e estados desconhecidos exigem conciliação manual. Um orçamento com cobrança solicitada não pode ser compensado por cancelamento.
+
 ## Validar
 
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
@@ -132,4 +145,4 @@ Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMens
 
 Estão pendentes: adaptador/worker SQS e validação de FIFO/DLQ/visibilidade/IAM; ativação do fluxo nas rotas de OS e corte do ownership; CI/CD e governança do novo repositório derivados das esteiras existentes; SQL/usuário isolados no RDS, fila/DLQ e integração Kubernetes/Gateway. O publicador local conserva a ordem global das pendências e só pode ter sua concorrência/política de falha ampliada com os testes do transporte real. A instrumentação nativa do Datadog precisa acompanhar o futuro deploy.
 
-F4-08 ainda requer checkout Mercado Pago em teste, notificação verificada, consulta ao provedor e confirmação financeira idempotente. Nenhum endpoint deste incremento confirma pagamento ou autoriza entrega de OS. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.
+Os testes do provedor substituto comprovam o comportamento local; não comprovam checkout ou Webhook reais do Mercado Pago. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.

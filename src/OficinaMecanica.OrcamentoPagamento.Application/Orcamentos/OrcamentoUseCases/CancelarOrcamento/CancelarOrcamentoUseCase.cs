@@ -7,12 +7,14 @@ using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.Responses;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Interfaces;
 using OficinaMecanica.OrcamentoPagamento.Domain.Orcamentos.Messages;
+using OficinaMecanica.OrcamentoPagamento.Domain.Pagamentos.Interfaces;
 
 namespace OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.CancelarOrcamento;
 
 public sealed class CancelarOrcamentoUseCase
 {
     private readonly IOrcamentoRepository _orcamentoRepository;
+    private readonly IPagamentoRepository _pagamentoRepository;
     private readonly IContextoIntegracaoOrcamentoStore _contextoIntegracaoStore;
     private readonly IOutbox _outbox;
     private readonly IUnitOfWork _unitOfWork;
@@ -23,6 +25,7 @@ public sealed class CancelarOrcamentoUseCase
 
     public CancelarOrcamentoUseCase(
         IOrcamentoRepository orcamentoRepository,
+        IPagamentoRepository pagamentoRepository,
         IContextoIntegracaoOrcamentoStore integracaoRepository,
         IOutbox outbox,
         IUnitOfWork unitOfWork,
@@ -32,6 +35,7 @@ public sealed class CancelarOrcamentoUseCase
         ILogger<CancelarOrcamentoUseCase> logger)
     {
         _orcamentoRepository = orcamentoRepository;
+        _pagamentoRepository = pagamentoRepository;
         _contextoIntegracaoStore = integracaoRepository;
         _outbox = outbox;
         _unitOfWork = unitOfWork;
@@ -48,27 +52,34 @@ public sealed class CancelarOrcamentoUseCase
         {
             return Result<OrcamentoResponse>.Falha(validacao.ObterMensagensErro(), TipoErro.Validacao);
         }
-        var orcamento = await _orcamentoRepository.ObterPorIdAsync(request.OrcamentoId, cancellationToken);
-        if (orcamento is null)
+        Result<OrcamentoResponse>? resultado = null;
+        await _unitOfWork.ExecutarEmTransacaoAsync(async ct =>
         {
-            return Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.OrcamentoNaoEncontrado, TipoErro.NaoEncontrado);
-        }
-
-        if (orcamento.Cancelar(request.Versao, request.Motivo))
-        {
-            var contexto = await _contextoIntegracaoStore.ObterContextoAsync(orcamento.Id, cancellationToken);
-            await _unitOfWork.ExecutarEmTransacaoAsync(async ct =>
+            var orcamento = await _orcamentoRepository.ObterPorIdAsync(request.OrcamentoId, ct);
+            if (orcamento is null)
             {
+                resultado = Result<OrcamentoResponse>.Falha(OrcamentoErrorMessages.OrcamentoNaoEncontrado, TipoErro.NaoEncontrado);
+                return;
+            }
+            if (await _pagamentoRepository.ObterPorOrcamentoAsync(orcamento.Id, ct) is not null)
+            {
+                resultado = Result<OrcamentoResponse>.Falha("O orçamento possui cobrança solicitada e não pode ser compensado por cancelamento.", TipoErro.Conflito);
+                return;
+            }
+            if (orcamento.Cancelar(request.Versao, request.Motivo))
+            {
+                var contexto = await _contextoIntegracaoStore.ObterContextoAsync(orcamento.Id, ct);
                 await _orcamentoRepository.AtualizarAsync(orcamento, ct);
                 await _outbox.AdicionarResultadoAsync(
                     ResultadosOrcamento.Cancelado(orcamento, contexto with
                     {
                         MensagemId = request.OperacaoId
                     }, _relogio), orcamento.Versao, ct);
-            }, cancellationToken);
-            _logger.LogInformation("Orçamento {OrcamentoId} atualizado para {Status}. {operation} {bounded_context}",
-                orcamento.Id, orcamento.Status, "CancelarOrcamento", "Orcamentos");
-        }
-        return Result<OrcamentoResponse>.Ok(_mapper.Map<OrcamentoResponse>(orcamento));
+                _logger.LogInformation("Orçamento {OrcamentoId} atualizado para {Status}. {operation} {bounded_context}",
+                    orcamento.Id, orcamento.Status, "CancelarOrcamento", "Orcamentos");
+            }
+            resultado = Result<OrcamentoResponse>.Ok(_mapper.Map<OrcamentoResponse>(orcamento));
+        }, cancellationToken);
+        return resultado ?? throw new InvalidOperationException("O cancelamento do orçamento não foi concluído.");
     }
 }

@@ -14,6 +14,7 @@ public static class ApiErrorStatusCodeExtensions
             TipoErro.NaoAutorizado => StatusCodes.Status401Unauthorized,
             TipoErro.AcessoProibido => StatusCodes.Status403Forbidden,
             TipoErro.Conflito => StatusCodes.Status409Conflict,
+            TipoErro.Indisponivel => StatusCodes.Status503ServiceUnavailable,
             TipoErro.ErroInterno => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest
         };
