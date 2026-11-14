@@ -43,6 +43,26 @@ docker compose down
 
 Esse comando preserva o volume de dados local. Não use remoção de volumes se quiser conservar seus orçamentos.
 
+## Adaptador Mercado Pago
+
+A integração externa usa um `HttpClient` tipado na Infrastructure e contratos próprios na Application. DTOs e nomes da API Mercado Pago permanecem na Infrastructure. O Domain não depende do provedor.
+
+| Variável local | Configuração .NET | Uso |
+| --- | --- | --- |
+| `MERCADO_PAGO_ATIVO` | `MercadoPago:Ativo` | `false` por padrão; ativação exige configuração completa |
+| `MERCADO_PAGO_ACCESS_TOKEN` | `MercadoPago:AccessToken` | Token da conta vendedora de teste |
+| `MERCADO_PAGO_WEBHOOK_SECRET` | `MercadoPago:WebhookSecret` | Chave de assinatura das notificações, distinta do token de acesso |
+| `MERCADO_PAGO_RECEBEDOR_ID` | `MercadoPago:RecebedorId` | ID da conta vendedora esperada nas respostas |
+| `MERCADO_PAGO_URL_NOTIFICACAO` | `MercadoPago:UrlNotificacao` | Endereço HTTPS público configurado para notificações |
+
+O Compose encaminha essas variáveis de `.env`; fora dele, usar as chaves equivalentes com `__` nas variáveis de ambiente. Configuração incompleta com ativação ligada falha na inicialização. As credenciais ficam fora do Git.
+
+O adaptador oferece criação de preferência Checkout Pro, reconciliação por referência e consulta de pagamento. Retorna somente endereço de sandbox e rejeita pagamentos com `live_mode=true`, moeda diferente de BRL ou outro recebedor. HTTP não possui repetição automática de criação: uma resposta incerta exige consulta por referência. A intenção/chave deve ser persistida pelo caso de uso antes da chamada; resultado sem correspondência ou ambíguo não autoriza outra criação automática.
+
+O validador HMAC autentica assinatura, requisição e identificador do recurso conforme o manifesto do provedor. Isso não confirma pagamento nem deduplica efeitos: o caso de uso precisa consultar o provedor, conferir o snapshot e confirmar estado/Inbox/Outbox na transação local. Timestamp participa da assinatura; este componente não impõe janela de expiração, e a proteção contra reentrega pertence à idempotência do fluxo.
+
+Essa configuração compõe os adaptadores; não expõe rotas de cobrança/webhook nem registra pagamento automaticamente. Referências: [preferências](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/overview) e [notificações](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/payment-notifications).
+
 ## Contrato HTTP local
 
 Todas as rotas abaixo exigem JWT válido; este serviço não emite tokens. Defaults compartilhados: issuer `oficina-mecanica-auth` e audience `oficina-mecanica-api`, configuráveis em `Jwt`.
