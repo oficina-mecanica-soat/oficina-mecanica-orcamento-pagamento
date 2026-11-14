@@ -198,12 +198,13 @@ O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamen
 | `TERRAFORM_STATE_KEY` | Secret exclusivo com 64 caracteres hexadecimais, correspondente a 256 bits; proteger a cópia de recuperação |
 | `JWT_SECRET` | Mesma chave dos emissores autorizados; não gerar chave diferente por serviço |
 | `JWT_ISSUER`, `JWT_AUDIENCE` | Variables do contrato compartilhado; defaults oficina-mecanica-auth e oficina-mecanica-api |
+| `FLUXO_DISTRIBUIDO_ENABLED` | Variable false por padrão; true exige workers habilitados e bloqueia geração/cancelamento HTTP coordenados pela OS |
 | `PROCESSAMENTO_REMOTO_ENABLED` | Variable false por padrão; true exige validar a fila FIFO real de resultados OS |
 | `MERCADO_PAGO_ATIVO` | Variable false por padrão; ativação exige os secrets e Variables da tabela Mercado Pago acima |
 
 O Environment permite somente a branch develop, como na API. `AWS_DEPLOY_ENABLED` e `AUTO_PR_ENABLED` permanecem sujeitos à autorização da janela. Habilitar uma opção funcional não habilita AWS. Homologation/production seguem os registros lógicos das esteiras existentes; nenhuma promoção é automática sem os gates, e nenhum workflow aprova PRs.
 
-O NodePort contratual do serviço é 30082, distinto da API; o ingresso privado e o roteamento público pertencem às esteiras Kubernetes/Gateway. O status `/oficina-mecanica/development/status/orcamento-pagamento-aplicacao` começa em implantacao-pendente, é invalidado antes de um novo apply e só vira ready após rollout da imagem esperada, conferência do Service e health HTTP privado. Filas prontas não substituem essa prova.
+O NodePort contratual do serviço é 30082, obtido de `kubernetes/orcamento_pagamento_internal_node_port` e validado pela esteira, distinto da API; o ingresso privado e o roteamento público pertencem às esteiras Kubernetes/Gateway. O status `/oficina-mecanica/development/status/orcamento-pagamento-aplicacao` começa em implantacao-pendente, é invalidado antes de um novo apply e só vira ready após rollout da imagem esperada, conferência do Service e health HTTP privado. Filas prontas não substituem essa prova. O parâmetro `orcamento-pagamento/fluxo_distribuido_habilitado` informa o modo aplicado e deve ser consumido junto desse status. Mudanças no ConfigMap provocam novo rollout pelo checksum no template dos pods.
 
 Planos e states contêm material sensível do Secret Kubernetes. Antes de upload/cache, a esteira usa AES-256-GCM com nonce aleatório e autenticação do contexto (repositório, conta, ambiente; plano também inclui execução, tentativa e commit). A chave vem exclusivamente do Environment e não é fornecida ao CI de PR. Só o pacote cifrado do plano e os states cifrados são publicados. Chave incorreta, arquivo alterado ou contexto divergente bloqueiam a restauração, sem assumir state vazio.
 

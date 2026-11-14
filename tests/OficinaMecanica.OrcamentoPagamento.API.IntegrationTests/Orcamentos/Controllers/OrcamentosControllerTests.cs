@@ -4,6 +4,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using OficinaMecanica.OrcamentoPagamento.API.Extensions.Security;
 using OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Fixtures;
 using OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Orcamentos.Builders;
 using OficinaMecanica.OrcamentoPagamento.Application.Orcamentos.OrcamentoUseCases.Responses;
@@ -27,6 +30,47 @@ public sealed class OrcamentosControllerTests : IAsyncLifetime
         await _fixture.ResetarBancoAsync();
     }
     public Task DisposeAsync() { _client.Dispose(); return Task.CompletedTask; }
+
+    [Fact]
+    public async Task Dado_FluxoDistribuido_Quando_GerarOuCancelarPorHttp_Entao_DeveBloquearMutacoesCoordenadasPelaOs()
+    {
+        // Arrange
+        using var client = _fixture.CreateClient(services => services.AddSingleton(Options.Create(new FluxoDistribuidoOptions { Habilitado = true })));
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+
+        // Act
+        var geracao = await client.PostAsJsonAsync("/api/v1/orcamentos", OrcamentoRequestBuilder.Novo());
+        var cancelamento = await client.PostAsJsonAsync($"/api/v1/orcamentos/{Guid.NewGuid()}/cancelar",
+            new { versao = 1, operacaoId = Guid.NewGuid(), motivo = "Orçamento recusado" });
+
+        // Assert
+        geracao.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        cancelamento.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await using var contexto = _fixture.CriarDbContext();
+        (await contexto.Orcamentos.CountAsync()).Should().Be(0);
+        (await contexto.Outbox.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Dado_FluxoDistribuido_Quando_ConsultarEDecidirOrcamento_Entao_DevePreservarRotasDoServicoProprietario()
+    {
+        // Arrange
+        var criado = await _client.PostAsJsonAsync("/api/v1/orcamentos", OrcamentoRequestBuilder.Novo());
+        var orcamento = (await criado.Content.ReadFromJsonAsync<OrcamentoResponse>())!;
+        using var client = _fixture.CreateClient(services => services.AddSingleton(Options.Create(new FluxoDistribuidoOptions { Habilitado = true })));
+        client.DefaultRequestHeaders.Authorization = _client.DefaultRequestHeaders.Authorization;
+
+        // Act
+        var consulta = await client.GetAsync($"/api/v1/orcamentos/{orcamento.Id}");
+        var decisao = await client.PostAsJsonAsync($"/api/v1/orcamentos/{orcamento.Id}/decisao",
+            new { versao = 1, decisao = "Aprovado", operacaoId = Guid.NewGuid() });
+
+        // Assert
+        consulta.StatusCode.Should().Be(HttpStatusCode.OK);
+        decisao.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        await using var contexto = _fixture.CriarDbContext();
+        (await contexto.Outbox.CountAsync()).Should().Be(2);
+    }
 
     [Fact]
     public async Task Dado_SnapshotValido_Quando_GerarConsultarEDecidir_Entao_DevePersistirUmaVezComOutbox()

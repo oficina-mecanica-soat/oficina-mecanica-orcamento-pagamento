@@ -575,6 +575,7 @@ jobs:
             'status/kubernetes': 'ready',
             'status/rds': 'ready',
             'status/rds-orcamento-pagamento': 'ready',
+            'kubernetes/orcamento_pagamento_internal_node_port': '30082',
             'kubernetes/cluster_name': 'oficina-mecanica-eks-dev',
             'kubernetes/orcamento_pagamento_ecr_repository_name': app.nome,
             'kubernetes/orcamento_pagamento_ecr_repository_url':
@@ -886,6 +887,25 @@ jobs:
             }
           });
 
+          test('corte exige workers e NodePort contratual', () => {
+            assert.equal(
+              app.configuracao({ ...env, PROCESSAMENTO_REMOTO_ENABLED: 'true', FLUXO_DISTRIBUIDO_ENABLED: 'true' }, aws)
+                .fluxo_distribuido_habilitado,
+              true
+            );
+            assert.throws(
+              () => app.configuracao({ ...env, FLUXO_DISTRIBUIDO_ENABLED: 'true' }, aws),
+              /workers habilitados/
+            );
+            const anterior = parametros['kubernetes/orcamento_pagamento_internal_node_port'];
+            parametros['kubernetes/orcamento_pagamento_internal_node_port'] = '30080';
+            try {
+              assert.throws(() => app.configuracao(env, aws), /NodePort/);
+            } finally {
+              parametros['kubernetes/orcamento_pagamento_internal_node_port'] = anterior;
+            }
+          });
+
           TESTAR_APLICACAO
           node --test "$RUNNER_TEMP/aplicacao-orcamento.test.cjs"
 
@@ -1007,8 +1027,8 @@ jobs:
             if(l['@testrun']==='ambiente_parametriza_nomes_e_contratos')assert.throws(()=>h.validarPlano(p,'apply','homologation'));
             else {h.validarPlano(p,'apply','development');planos++;}
           }
-          assert.equal(planos,7);
-          console.log('Oito planos simulados aprovados; sete planos development passam pelo guardrail real e homologation permanece bloqueada.');
+          assert.equal(planos,9);
+          console.log('Dez planos simulados aprovados; nove planos development passam pelo guardrail real e homologation permanece bloqueada.');
           VALIDAR_PLANOS_REAIS
 
   quality_gate:

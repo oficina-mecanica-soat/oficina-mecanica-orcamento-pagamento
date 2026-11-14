@@ -3,6 +3,16 @@ variable "aplicacao_habilitada" {
   type        = bool
   default     = false
 }
+
+variable "fluxo_distribuido_habilitado" {
+  description = "Retira mutações HTTP que pertencem à coordenação da OS somente na janela de corte."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.fluxo_distribuido_habilitado || var.processamento_remoto_habilitado
+    error_message = "O corte distribuído exige os workers habilitados; não retirar as rotas antes do consumidor."
+  }
+}
 variable "aplicacao_image_uri" {
   description = "Imagem imutável validada pela CI e publicada no ECR próprio."
   type        = string

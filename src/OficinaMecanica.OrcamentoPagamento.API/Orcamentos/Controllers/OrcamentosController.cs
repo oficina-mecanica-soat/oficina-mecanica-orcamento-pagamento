@@ -1,3 +1,4 @@
+using OficinaMecanica.OrcamentoPagamento.API.Extensions.Security;
 using System.Security.Claims;
 using OficinaMecanica.OrcamentoPagamento.Application.Identidade;
 using Microsoft.AspNetCore.Authorization;
@@ -17,6 +18,7 @@ namespace OficinaMecanica.OrcamentoPagamento.API.Orcamentos.Controllers;
 [Authorize]
 public sealed class OrcamentosController : ControllerBase
 {
+    [ExigirFluxoLegado]
     [HttpPost]
     [ProducesResponseType(typeof(OrcamentoResponse), StatusCodes.Status201Created)]
     [Authorize(Roles = PerfisAcesso.AdministradorAtendente)]
@@ -54,6 +56,7 @@ public sealed class OrcamentosController : ControllerBase
         return resultado.Sucesso ? AcceptedAtAction(nameof(Detalhar), new { orcamentoId }, resultado.Valor) : this.ToActionResult(resultado);
     }
 
+    [ExigirFluxoLegado]
     [HttpPost("{orcamentoId:guid}/cancelar")]
     [ProducesResponseType(typeof(OrcamentoResponse), StatusCodes.Status202Accepted)]
     [Authorize(Roles = PerfisAcesso.AdministradorAtendente)]
