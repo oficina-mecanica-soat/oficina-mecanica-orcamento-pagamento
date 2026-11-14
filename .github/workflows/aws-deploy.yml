@@ -1,5 +1,5 @@
 name: "☁️ AWS Deploy"
-run-name: "☁️ Executar infraestrutura de mensageria em ${{ inputs.environment_name }}"
+run-name: "☁️ Executar deploy de Orçamento/Pagamento em ${{ inputs.environment_name }}"
 
 on:
   workflow_call:
@@ -24,6 +24,7 @@ on:
 permissions:
   contents: read
   actions: read
+  pull-requests: read
 
 concurrency:
   group: orcamento-pagamento-aws-development
@@ -83,12 +84,16 @@ jobs:
   prepare_and_plan:
     name: "📋 02 · Preparar variáveis e gerar plano"
     needs: resolve_action
+    outputs:
+      ecr_image_uri: ${{ steps.prepare_vars.outputs.ecr_image_uri }}
+      eks_cluster_name: ${{ steps.prepare_vars.outputs.eks_cluster_name }}
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment_name }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       TERRAFORM_ACTION: ${{ needs.resolve_action.outputs.terraform_action }}
+      TERRAFORM_STATE_KEY: ${{ secrets.TERRAFORM_STATE_KEY }}
     steps:
       - name: "📥 01 · Baixar código do repositório"
         uses: actions/checkout@v7
@@ -101,47 +106,104 @@ jobs:
           const path = require('node:path');
           const cp = require('node:child_process');
           const chaves = ['entrada_queue_url', 'entrada_queue_arn', 'dlq_url', 'dlq_arn'];
-          const contagens = ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'ApproximateNumberOfMessagesDelayed'];
+          const contagens = [
+            'ApproximateNumberOfMessages',
+            'ApproximateNumberOfMessagesNotVisible',
+            'ApproximateNumberOfMessagesDelayed'
+          ];
 
           function nomes(ambiente) {
             if (ambiente !== 'development') throw new Error('Operação física permitida somente em development.');
             const base = '/oficina-mecanica/' + ambiente;
-            return { prefixo: base + '/orcamento-pagamento', status: base + '/status/orcamento-pagamento', produtor: base + '/status/api', fila: 'oficina-mecanica-orcamento-pagamento-' + ambiente };
+            return {
+              prefixo: base + '/orcamento-pagamento',
+              status: base + '/status/orcamento-pagamento',
+              produtor: base + '/status/api',
+              fila: 'oficina-mecanica-orcamento-pagamento-' + ambiente
+            };
           }
           function validarState(state, conta, regiao, ambiente) {
-            if (!state || !Array.isArray(state.resources)) throw new Error('State inválido; não substituir por state vazio.');
+            if (!state || !Array.isArray(state.resources))
+              throw new Error('State inválido; não substituir por state vazio.');
             const n = nomes(ambiente);
             for (const r of state.resources) {
+              if (r.mode === 'data' || r.type?.startsWith('kubernetes_')) {
+                if (require('./aplicacao-orcamento.cjs').validarRecurso(r, conta, regiao)) continue;
+              }
               if (r.mode !== 'managed') throw new Error('State contém data source ou modo não autorizado.');
-              const recursos = { aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'], aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'], aws_ssm_parameter: ['orcamento_pagamento_mensageria', 'orcamento_pagamento_mensageria_status'] };
+              const recursos = {
+                aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'],
+                aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'],
+                aws_ssm_parameter: [
+                  'orcamento_pagamento_mensageria',
+                  'orcamento_pagamento_mensageria_status',
+                  'orcamento_pagamento_aplicacao_status'
+                ]
+              };
               if (!recursos[r.type]?.includes(r.name)) throw new Error('Recurso desconhecido no state.');
-              if (r.module || !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)) throw new Error('State contém recurso fora do ownership da mensageria.');
+              if (
+                r.module ||
+                !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)
+              )
+                throw new Error('State contém recurso fora do ownership da mensageria.');
               for (const i of r.instances || []) {
                 const a = i.attributes || {};
                 if (r.type === 'aws_ssm_parameter') {
-                  if (![n.status, ...chaves.map(k => n.prefixo + '/' + k)].includes(a.name) || a.arn !== 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + a.name) throw new Error('Parâmetro do state pertence a outro owner, conta ou região.');
+                  if (
+                    ![
+                      n.status,
+                      '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+                      ...chaves.map((k) => n.prefixo + '/' + k)
+                    ].includes(a.name) ||
+                    a.arn !== 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + a.name
+                  )
+                    throw new Error('Parâmetro do state pertence a outro owner, conta ou região.');
                 } else {
                   const url = a.queue_url || a.url || a.id;
                   const permitidas = [n.fila + '.fifo', n.fila + '-dlq.fifo'];
-                  if (!permitidas.some(nome => url === 'https://sqs.' + regiao + '.amazonaws.com/' + conta + '/' + nome)) throw new Error('Fila do state pertence a outro owner, conta ou região.');
-                  if (r.type === 'aws_sqs_queue' && a.arn !== 'arn:aws:sqs:' + regiao + ':' + conta + ':' + url.split('/').pop()) throw new Error('ARN da fila diverge do state.');
+                  if (
+                    !permitidas.some((nome) => url === 'https://sqs.' + regiao + '.amazonaws.com/' + conta + '/' + nome)
+                  )
+                    throw new Error('Fila do state pertence a outro owner, conta ou região.');
+                  if (
+                    r.type === 'aws_sqs_queue' &&
+                    a.arn !== 'arn:aws:sqs:' + regiao + ':' + conta + ':' + url.split('/').pop()
+                  )
+                    throw new Error('ARN da fila diverge do state.');
                 }
               }
             }
           }
           function contratos(state) {
-            const fila = nome => (state.resources || []).find(r => r.mode === 'managed' && r.type === 'aws_sqs_queue' && r.name === nome)?.instances?.[0]?.attributes || {};
-            const entrada = fila('orcamento_pagamento_entrada'), dlq = fila('orcamento_pagamento_dlq');
-            return { entrada_queue_url: entrada.url || entrada.id || '', entrada_queue_arn: entrada.arn || '', dlq_url: dlq.url || dlq.id || '', dlq_arn: dlq.arn || '' };
+            const fila = (nome) =>
+              (state.resources || []).find((r) => r.mode === 'managed' && r.type === 'aws_sqs_queue' && r.name === nome)
+                ?.instances?.[0]?.attributes || {};
+            const entrada = fila('orcamento_pagamento_entrada'),
+              dlq = fila('orcamento_pagamento_dlq');
+            return {
+              entrada_queue_url: entrada.url || entrada.id || '',
+              entrada_queue_arn: entrada.arn || '',
+              dlq_url: dlq.url || dlq.id || '',
+              dlq_arn: dlq.arn || ''
+            };
           }
           function ausente(args, erro) {
-            const codigos = { sqs: ['(AWS.SimpleQueueService.NonExistentQueue)', '(QueueDoesNotExist)'], ssm: ['(ParameterNotFound)'] };
-            return codigos[args[0]]?.some(codigo => String(erro.stderr).includes(codigo)) || false;
+            const codigos = {
+              sqs: ['(AWS.SimpleQueueService.NonExistentQueue)', '(QueueDoesNotExist)'],
+              ssm: ['(ParameterNotFound)']
+            };
+            return codigos[args[0]]?.some((codigo) => String(erro.stderr).includes(codigo)) || false;
           }
           function consultar(...args) {
             try {
-              const resposta = JSON.parse(cp.execFileSync('aws', [...args, '--region', process.env.AWS_REGION, '--output', 'json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
-              if (!resposta || typeof resposta !== 'object' || Array.isArray(resposta)) throw new Error('Resposta inválida.');
+              const resposta = JSON.parse(
+                cp.execFileSync('aws', [...args, '--region', process.env.AWS_REGION, '--output', 'json'], {
+                  encoding: 'utf8',
+                  stdio: ['ignore', 'pipe', 'pipe']
+                })
+              );
+              if (!resposta || typeof resposta !== 'object' || Array.isArray(resposta))
+                throw new Error('Resposta inválida.');
               return resposta;
             } catch (erro) {
               if (ausente(args, erro)) return null;
@@ -150,32 +212,88 @@ jobs:
           }
           function verificarVazio(ambiente, aws) {
             const n = nomes(ambiente);
-            for (const nome of [n.fila + '.fifo', n.fila + '-dlq.fifo']) if (aws('sqs', 'get-queue-url', '--queue-name', nome) !== null) throw new Error('Fila existente sem state recuperado; bootstrap bloqueado.');
-            const parametros = aws('ssm', 'describe-parameters', '--parameter-filters', 'Key=Name,Option=BeginsWith,Values=' + n.prefixo + '/');
-            if (!Array.isArray(parametros?.Parameters) || parametros.Parameters.length) throw new Error('Contrato existente ou inventário inválido; bootstrap bloqueado.');
-            if (aws('ssm', 'get-parameter', '--name', n.status) !== null) throw new Error('Status existente sem state; bootstrap bloqueado.');
+            for (const nome of [n.fila + '.fifo', n.fila + '-dlq.fifo'])
+              if (aws('sqs', 'get-queue-url', '--queue-name', nome) !== null)
+                throw new Error('Fila existente sem state recuperado; bootstrap bloqueado.');
+            const parametros = aws(
+              'ssm',
+              'describe-parameters',
+              '--parameter-filters',
+              'Key=Name,Option=BeginsWith,Values=' + n.prefixo + '/'
+            );
+            if (!Array.isArray(parametros?.Parameters) || parametros.Parameters.length)
+              throw new Error('Contrato existente ou inventário inválido; bootstrap bloqueado.');
+            if (
+              aws(
+                'ssm',
+                'get-parameter',
+                '--name',
+                '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao'
+              ) !== null
+            )
+              throw new Error('Status da aplicação existente sem state; bootstrap bloqueado.');
+            if (aws('ssm', 'get-parameter', '--name', n.status) !== null)
+              throw new Error('Status existente sem state; bootstrap bloqueado.');
           }
           function pendencias(c, ambiente, aws) {
             if (!Object.values(c).some(Boolean)) return;
-            if (Object.values(c).some(v => !v)) throw new Error('State incompleto; não presumir filas ausentes.');
-            if (aws('ssm', 'get-parameter', '--name', nomes(ambiente).produtor) !== null) throw new Error('Produtor OS ainda possui infraestrutura ativa; remover o produtor antes da mensageria de cobrança.');
+            if (Object.values(c).some((v) => !v)) throw new Error('State incompleto; não presumir filas ausentes.');
+            if (aws('ssm', 'get-parameter', '--name', nomes(ambiente).produtor) !== null)
+              throw new Error(
+                'Produtor OS ainda possui infraestrutura ativa; remover o produtor antes da mensageria de cobrança.'
+              );
             for (const url of [c.entrada_queue_url, c.dlq_url]) {
-              const resposta = aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', ...contagens);
+              const resposta = aws(
+                'sqs',
+                'get-queue-attributes',
+                '--queue-url',
+                url,
+                '--attribute-names',
+                ...contagens
+              );
               if (resposta === null) continue;
-              for (const campo of contagens) if (typeof resposta.Attributes?.[campo] !== 'string' || !/^\d+$/.test(resposta.Attributes[campo]) || Number(resposta.Attributes[campo]) !== 0) throw new Error('Mensagens pendentes ou contagem inválida; destroy bloqueado.');
+              for (const campo of contagens)
+                if (
+                  typeof resposta.Attributes?.[campo] !== 'string' ||
+                  !/^\d+$/.test(resposta.Attributes[campo]) ||
+                  Number(resposta.Attributes[campo]) !== 0
+                )
+                  throw new Error('Mensagens pendentes ou contagem inválida; destroy bloqueado.');
             }
           }
           function verificarInfra(c, ambiente, aws) {
-            if (Object.values(c).some(v => !v)) throw new Error('Contratos incompletos após apply.');
-            for (const [url, arn, dlq] of [[c.entrada_queue_url, c.entrada_queue_arn, false], [c.dlq_url, c.dlq_arn, true]]) {
+            if (Object.values(c).some((v) => !v)) throw new Error('Contratos incompletos após apply.');
+            for (const [url, arn, dlq] of [
+              [c.entrada_queue_url, c.entrada_queue_arn, false],
+              [c.dlq_url, c.dlq_arn, true]
+            ]) {
               const a = aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', 'All')?.Attributes;
-              if (!a || a.QueueArn !== arn || a.FifoQueue !== 'true' || a.ContentBasedDeduplication !== 'false' || a.SqsManagedSseEnabled !== 'true' || a.MessageRetentionPeriod !== (dlq ? '1209600' : '345600')) throw new Error('Fila real diverge do contrato de FIFO, criptografia ou retenção.');
+              if (
+                !a ||
+                a.QueueArn !== arn ||
+                a.FifoQueue !== 'true' ||
+                a.ContentBasedDeduplication !== 'false' ||
+                a.SqsManagedSseEnabled !== 'true' ||
+                a.MessageRetentionPeriod !== (dlq ? '1209600' : '345600')
+              )
+                throw new Error('Fila real diverge do contrato de FIFO, criptografia ou retenção.');
               if (!dlq) {
                 const redrive = JSON.parse(a.RedrivePolicy || '{}');
-                if (a.VisibilityTimeout !== '60' || a.ReceiveMessageWaitTimeSeconds !== '20' || redrive.deadLetterTargetArn !== c.dlq_arn || Number(redrive.maxReceiveCount) !== 5) throw new Error('Recuperação da entrada diverge da RFC.');
+                if (
+                  a.VisibilityTimeout !== '60' ||
+                  a.ReceiveMessageWaitTimeSeconds !== '20' ||
+                  redrive.deadLetterTargetArn !== c.dlq_arn ||
+                  Number(redrive.maxReceiveCount) !== 5
+                )
+                  throw new Error('Recuperação da entrada diverge da RFC.');
               } else {
                 const allow = JSON.parse(a.RedriveAllowPolicy || '{}');
-                if (allow.redrivePermission !== 'byQueue' || allow.sourceQueueArns?.length !== 1 || allow.sourceQueueArns[0] !== c.entrada_queue_arn) throw new Error('DLQ aceita redrive de outra origem.');
+                if (
+                  allow.redrivePermission !== 'byQueue' ||
+                  allow.sourceQueueArns?.length !== 1 ||
+                  allow.sourceQueueArns[0] !== c.entrada_queue_arn
+                )
+                  throw new Error('DLQ aceita redrive de outra origem.');
               }
             }
             const n = nomes(ambiente);
@@ -184,47 +302,103 @@ jobs:
               if (p?.Value !== c[k] || p.Type !== 'String') throw new Error('Contrato SSM diverge do state.');
             }
             const status = aws('ssm', 'get-parameter', '--name', n.status)?.Parameter;
-            if (status?.Value !== 'ready' || status.Type !== 'String') throw new Error('Status da infraestrutura divergente.');
+            if (status?.Value !== 'ready' || status.Type !== 'String')
+              throw new Error('Status da infraestrutura divergente.');
           }
           function verificarRemocao(c, ambiente, aws) {
-            for (const url of [c.entrada_queue_url, c.dlq_url].filter(Boolean)) if (aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', 'QueueArn') !== null) throw new Error('Fila ainda existe após destroy.');
+            for (const url of [c.entrada_queue_url, c.dlq_url].filter(Boolean))
+              if (aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', 'QueueArn') !== null)
+                throw new Error('Fila ainda existe após destroy.');
             const n = nomes(ambiente);
-            for (const nome of [n.status, ...chaves.map(k => n.prefixo + '/' + k)]) if (aws('ssm', 'get-parameter', '--name', nome) !== null) throw new Error('Parâmetro ainda existe após destroy.');
+            for (const nome of [
+              n.status,
+              '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+              ...chaves.map((k) => n.prefixo + '/' + k)
+            ])
+              if (aws('ssm', 'get-parameter', '--name', nome) !== null)
+                throw new Error('Parâmetro ainda existe após destroy.');
           }
-          function validarPlano(plano, acao, ambiente = "development") {
+          function validarPlano(plano, acao, ambiente = 'development') {
             const n = nomes(ambiente);
-            if (!['apply', 'destroy'].includes(acao) || typeof plano.format_version !== 'string' || !plano.planned_values || (plano.resource_changes !== undefined && !Array.isArray(plano.resource_changes))) throw new Error('Plano ou ação inválidos.');
+            if (
+              !['apply', 'destroy'].includes(acao) ||
+              typeof plano.format_version !== 'string' ||
+              !plano.planned_values ||
+              (plano.resource_changes !== undefined && !Array.isArray(plano.resource_changes))
+            )
+              throw new Error('Plano ou ação inválidos.');
             for (const r of plano.resource_changes || []) {
+              if (r.mode === 'data' || r.type?.startsWith('kubernetes_')) {
+                if (require('./aplicacao-orcamento.cjs').validarPlanoRecurso(r, acao)) continue;
+              }
               if (r.mode === 'data') throw new Error('Mensageria não deve depender de data source de outro owner.');
-              if (r.module_address || !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)) throw new Error('Plano contém infraestrutura fora do owner.');
-              const nomesRecursos = { aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'], aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'], aws_ssm_parameter: ['orcamento_pagamento_mensageria', 'orcamento_pagamento_mensageria_status'] };
+              if (
+                r.module_address ||
+                !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)
+              )
+                throw new Error('Plano contém infraestrutura fora do owner.');
+              const nomesRecursos = {
+                aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'],
+                aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'],
+                aws_ssm_parameter: [
+                  'orcamento_pagamento_mensageria',
+                  'orcamento_pagamento_mensageria_status',
+                  'orcamento_pagamento_aplicacao_status'
+                ]
+              };
               if (!nomesRecursos[r.type]?.includes(r.name)) throw new Error('Plano contém recurso desconhecido.');
               const atributos = r.change?.after || r.change?.before || {};
-              if (r.type === 'aws_sqs_queue' && ![n.fila + '.fifo', n.fila + '-dlq.fifo'].includes(atributos.name)) throw new Error('Plano contém fila de outro owner.');
-              if (r.type === 'aws_ssm_parameter' && ![n.status, ...chaves.map(k => n.prefixo + '/' + k)].includes(atributos.name)) throw new Error('Plano contém parâmetro de outro owner.');
+              if (r.type === 'aws_sqs_queue' && ![n.fila + '.fifo', n.fila + '-dlq.fifo'].includes(atributos.name))
+                throw new Error('Plano contém fila de outro owner.');
+              if (
+                r.type === 'aws_ssm_parameter' &&
+                ![
+                  n.status,
+                  '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao',
+                  ...chaves.map((k) => n.prefixo + '/' + k)
+                ].includes(atributos.name)
+              )
+                throw new Error('Plano contém parâmetro de outro owner.');
               const acoes = r.change?.actions;
-              if (!Array.isArray(acoes) || acoes.length === 0 || acoes.some(a => !['no-op', 'delete', 'create', 'update', 'read'].includes(a))) throw new Error('Ações de plano inválidas.');
-              if (acao === 'destroy' && acoes.some(a => !['no-op', 'delete', 'read'].includes(a))) throw new Error('Destroy não pode criar ou atualizar recursos.');
-              if (acao === 'apply' && acoes.includes('delete')) throw new Error('Remoção/substituição exige destroy dedicado e filas drenadas.');
+              if (
+                !Array.isArray(acoes) ||
+                acoes.length === 0 ||
+                acoes.some((a) => !['no-op', 'delete', 'create', 'update', 'read'].includes(a))
+              )
+                throw new Error('Ações de plano inválidas.');
+              if (acao === 'destroy' && acoes.some((a) => !['no-op', 'delete', 'read'].includes(a)))
+                throw new Error('Destroy não pode criar ou atualizar recursos.');
+              if (acao === 'apply' && acoes.includes('delete'))
+                throw new Error('Remoção/substituição exige destroy dedicado e filas drenadas.');
             }
           }
           function validarContextoPlano(atual, esperado) {
-            if (!atual || Object.keys(atual).length !== Object.keys(esperado).length || Object.entries(esperado).some(([k, v]) => atual[k] !== v)) throw new Error('Plano pertence a outra conta, região, ambiente, ação ou commit.');
+            if (
+              !atual ||
+              Object.keys(atual).length !== Object.keys(esperado).length ||
+              Object.entries(esperado).some(([k, v]) => atual[k] !== v)
+            )
+              throw new Error('Plano pertence a outra conta, região, ambiente, ação ou commit.');
           }
           function main() {
-            const dir = process.env.TF_WORKING_DIRECTORY, ambiente = process.env.SSM_ENVIRONMENT_NAME;
+            const dir = process.env.TF_WORKING_DIRECTORY,
+              ambiente = process.env.SSM_ENVIRONMENT_NAME;
             nomes(ambiente);
             const stateFile = path.join(dir, 'terraform.tfstate');
             const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { resources: [] };
             const conta = consultar('sts', 'get-caller-identity')?.Account;
             if (!/^\d{12}$/.test(conta || '')) throw new Error('Identidade AWS inválida.');
             validarState(state, conta, process.env.AWS_REGION, ambiente);
-            const c = contratos(state), modo = process.argv[2];
+            const c = contratos(state),
+              modo = process.argv[2];
             if (modo === 'state') {
               if (!fs.existsSync(stateFile)) {
-                if (process.env.TERRAFORM_ACTION !== 'destroy') throw new Error('Cache ausente; exige bootstrap por destroy dedicado e inventário vazio do próprio owner.');
+                if (process.env.TERRAFORM_ACTION !== 'destroy')
+                  throw new Error(
+                    'Cache ausente; exige bootstrap por destroy dedicado e inventário vazio do próprio owner.'
+                  );
                 verificarVazio(ambiente, consultar);
-              } else if (!state.resources.some(r => r.mode === 'managed' && r.instances?.length)) {
+              } else if (!state.resources.some((r) => r.mode === 'managed' && r.instances?.length)) {
                 verificarVazio(ambiente, consultar);
               }
             } else if (modo === 'before-destroy') {
@@ -232,22 +406,694 @@ jobs:
               fs.writeFileSync(path.join(dir, 'mensageria-destroy-context.json'), JSON.stringify(c));
             } else if (modo === 'after-apply') verificarInfra(c, ambiente, consultar);
             else if (modo === 'after-destroy') {
-              if (state.resources.some(r => r.mode === 'managed' && r.instances?.length)) throw new Error('State ainda contém recursos gerenciados.');
-              verificarRemocao(JSON.parse(fs.readFileSync(path.join(dir, 'mensageria-destroy-context.json'), 'utf8')), ambiente, consultar);
+              if (state.resources.some((r) => r.mode === 'managed' && r.instances?.length))
+                throw new Error('State ainda contém recursos gerenciados.');
+              verificarRemocao(
+                JSON.parse(fs.readFileSync(path.join(dir, 'mensageria-destroy-context.json'), 'utf8')),
+                ambiente,
+                consultar
+              );
             } else if (modo === 'plan') {
-              const plano = JSON.parse(cp.execFileSync('terraform', ['-chdir=' + dir, 'show', '-json', 'tfplan'], { encoding: 'utf8' }));
+              const plano = JSON.parse(
+                cp.execFileSync('terraform', ['-chdir=' + dir, 'show', '-json', 'tfplan'], { encoding: 'utf8' })
+              );
               validarPlano(plano, process.env.TERRAFORM_ACTION, ambiente);
-              const contextoPlano = { conta, regiao: process.env.AWS_REGION, ambiente, acao: process.env.TERRAFORM_ACTION, commit: process.env.GITHUB_SHA };
+              const contextoPlano = {
+                conta,
+                regiao: process.env.AWS_REGION,
+                ambiente,
+                acao: process.env.TERRAFORM_ACTION,
+                commit: process.env.GITHUB_SHA
+              };
               const arquivoPlano = path.join(dir, 'plan-context.json');
-              if (process.argv[3] === 'verify-context') validarContextoPlano(JSON.parse(fs.readFileSync(arquivoPlano, 'utf8')), contextoPlano);
+              if (process.argv[3] === 'verify-context')
+                validarContextoPlano(JSON.parse(fs.readFileSync(arquivoPlano, 'utf8')), contextoPlano);
               else fs.writeFileSync(arquivoPlano, JSON.stringify(contextoPlano));
             } else throw new Error('Verificação não reconhecida.');
             console.log('Validação de mensageria concluída: ' + modo + '. Não comprova aplicação implantada.');
           }
-          module.exports = { nomes, validarState, contratos, ausente, verificarVazio, pendencias, verificarInfra, verificarRemocao, validarPlano, validarContextoPlano };
-          if (require.main === module) { try { main(); } catch (erro) { console.error(erro.message); process.exit(1); } }
+          module.exports = {
+            nomes,
+            validarState,
+            contratos,
+            ausente,
+            verificarVazio,
+            pendencias,
+            verificarInfra,
+            verificarRemocao,
+            validarPlano,
+            validarContextoPlano
+          };
+          if (require.main === module) {
+            try {
+              main();
+            } catch (erro) {
+              console.error('Verificação de ownership ou mensageria falhou; detalhes sensíveis omitidos.');
+              process.exit(1);
+            }
+          }
 
           VALIDAR_MENSAGERIA
+
+      - name: "🧩 Preparar composição da aplicação"
+        run: &validacoes_aplicacao |
+          cat > "$RUNNER_TEMP/aplicacao-orcamento.cjs" <<'VALIDAR_APLICACAO'
+          'use strict';
+          const fs = require('node:fs'),
+            path = require('node:path'),
+            cp = require('node:child_process');
+          class FalhaConfiguracao extends Error {}
+
+          const nome = 'oficina-mecanica-orcamento-pagamento';
+          const tipos = [
+            'kubernetes_namespace_v1',
+            'kubernetes_config_map_v1',
+            'kubernetes_secret_v1',
+            'kubernetes_deployment_v1',
+            'kubernetes_service_v1',
+            'kubernetes_horizontal_pod_autoscaler_v2'
+          ];
+          function chamada(cmd, args, input) {
+            return cp
+              .execFileSync(cmd, args, { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], timeout: 120000 })
+              .trim();
+          }
+          function aws(...args) {
+            return JSON.parse(chamada('aws', [...args, '--region', process.env.AWS_REGION, '--output', 'json']));
+          }
+          function booleano(valor, nomeFlag) {
+            if (!['true', 'false'].includes(valor)) throw new FalhaConfiguracao('Flag inválida: ' + nomeFlag);
+            return valor === 'true';
+          }
+          function validarRecurso(r, conta, regiao) {
+            if (r.module || r.module_address)
+              throw new FalhaConfiguracao('Aplicação não adota módulos de outro owner.');
+            if (r.mode === 'data') {
+              if (!['aws_eks_cluster', 'aws_eks_cluster_auth'].includes(r.type) || r.name !== 'aplicacao')
+                throw new FalhaConfiguracao('Data source desconhecido.');
+              for (const i of r.instances || []) {
+                const a = i.attributes || {};
+                if (!/^oficina-mecanica-eks-[a-z0-9-]+$/.test(a.name || a.id || ''))
+                  throw new FalhaConfiguracao('Cluster fora do projeto.');
+                if (a.arn && a.arn !== 'arn:aws:eks:' + regiao + ':' + conta + ':cluster/' + a.name)
+                  throw new FalhaConfiguracao('Cluster do state pertence a outra conta ou região.');
+              }
+              return true;
+            }
+            if (!tipos.includes(r.type)) return false;
+            if (r.mode !== 'managed') throw new FalhaConfiguracao('Modo de recurso Kubernetes inválido.');
+            if (r.name !== 'orcamento_pagamento')
+              throw new FalhaConfiguracao('Recurso Kubernetes pertence a outro owner.');
+            for (const i of r.instances || []) validarMetadados(r.type, i.attributes || {});
+            return true;
+          }
+          function validarMetadados(tipo, a) {
+            const m = a.metadata?.[0];
+            const esperado =
+              tipo === 'kubernetes_namespace_v1'
+                ? nome
+                : tipo === 'kubernetes_secret_v1'
+                  ? nome + '-secret'
+                  : tipo === 'kubernetes_config_map_v1'
+                    ? nome + '-config'
+                    : tipo === 'kubernetes_horizontal_pod_autoscaler_v2'
+                      ? nome + '-hpa'
+                      : nome;
+            if (!m || m.name !== esperado || (tipo !== 'kubernetes_namespace_v1' && m.namespace !== nome))
+              throw new FalhaConfiguracao('Nome ou namespace do recurso pertence a outro owner.');
+          }
+          function validarPlanoRecurso(r, acao, conta = process.env.AWS_ACCOUNT_ID, regiao = process.env.AWS_REGION) {
+            if (r.mode !== 'data' && !tipos.includes(r.type)) return false;
+            const atributos = r.change?.after || r.change?.before || {};
+            if (!/^\d{12}$/.test(conta || '') || !/^[a-z]{2}-[a-z]+-\d+$/.test(regiao || ''))
+              throw new FalhaConfiguracao('Conta/região do plano ausentes.');
+            validarRecurso({ ...r, instances: [{ attributes: atributos }] }, conta, regiao);
+            const acoes = r.change?.actions;
+            if (
+              !Array.isArray(acoes) ||
+              !acoes.length ||
+              acoes.some((a) => !['no-op', 'create', 'update', 'delete', 'read', 'forget'].includes(a))
+            )
+              throw new FalhaConfiguracao('Ações inválidas na aplicação.');
+            if (r.mode === 'data' && acoes.some((a) => !['read', 'no-op', 'delete'].includes(a)))
+              throw new FalhaConfiguracao('Data source não permite mutação.');
+            if (acao === 'apply' && acoes.some((a) => ['delete', 'forget'].includes(a)))
+              throw new FalhaConfiguracao('Remoção/substituição da aplicação exige destroy dedicado.');
+            if (acao === 'destroy' && acoes.some((a) => !['no-op', 'delete', 'read', 'forget'].includes(a)))
+              throw new FalhaConfiguracao('Destroy não permite alterar aplicação.');
+            return true;
+          }
+          function validarCredencial(c) {
+            if (
+              !c ||
+              Object.keys(c).sort().join(',') !== 'database,password,username' ||
+              c.database !== 'OficinaMecanicaOrcamentoPagamento' ||
+              c.username !== 'oficina_orcamento_pagamento' ||
+              typeof c.password !== 'string' ||
+              !/^[a-f0-9]{96}!Aa9$/.test(c.password)
+            )
+              throw new FalhaConfiguracao('Credencial não corresponde ao contrato exclusivo do banco.');
+            return c;
+          }
+          function configuracao(env, consultar) {
+            if (env.SSM_ENVIRONMENT_NAME !== 'development' || env.GITHUB_REF !== 'refs/heads/develop')
+              throw new FalhaConfiguracao('Composição física somente em development.');
+            if (
+              !env.JWT_SECRET ||
+              Buffer.byteLength(env.JWT_SECRET) < 32 ||
+              !env.JWT_ISSUER?.trim() ||
+              !env.JWT_AUDIENCE?.trim()
+            )
+              throw new FalhaConfiguracao('JWT incompleto.');
+            if (!/^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')) throw new FalhaConfiguracao('Commit inválido.');
+            const mp = booleano(env.MERCADO_PAGO_ATIVO || 'false', 'MERCADO_PAGO_ATIVO');
+            if (mp) {
+              const u = new URL(env.MERCADO_PAGO_URL_NOTIFICACAO || '');
+              if (
+                !env.MERCADO_PAGO_ACCESS_TOKEN ||
+                !env.MERCADO_PAGO_WEBHOOK_SECRET ||
+                env.MERCADO_PAGO_ACCESS_TOKEN === env.MERCADO_PAGO_WEBHOOK_SECRET ||
+                env.MERCADO_PAGO_WEBHOOK_SECRET === env.JWT_SECRET ||
+                !/^[1-9][0-9]*$/.test(env.MERCADO_PAGO_RECEBEDOR_ID || '') ||
+                u.protocol !== 'https:' ||
+                u.username ||
+                u.password ||
+                u.hash ||
+                ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)
+              )
+                throw new FalhaConfiguracao('Mercado Pago de teste incompleto ou sem segregação.');
+            }
+            const conta = consultar('sts', 'get-caller-identity').Account;
+            if (!/^\d{12}$/.test(conta || '')) throw new FalhaConfiguracao('Conta inválida.');
+            const base = '/oficina-mecanica/development';
+            const parametro = (sufixo) => {
+              const p = consultar('ssm', 'get-parameter', '--name', base + '/' + sufixo).Parameter;
+              if (p?.Type !== 'String' || typeof p.Value !== 'string' || !p.Value)
+                throw new FalhaConfiguracao('Contrato SSM inválido: ' + sufixo);
+              return p.Value;
+            };
+            for (const status of ['kubernetes', 'rds', 'rds-orcamento-pagamento'])
+              if (parametro('status/' + status) !== 'ready')
+                throw new FalhaConfiguracao('Dependência não disponível: ' + status);
+            const clusterName = parametro('kubernetes/cluster_name');
+            if (!/^oficina-mecanica-eks-[a-z0-9-]+$/.test(clusterName))
+              throw new FalhaConfiguracao('Cluster fora do projeto.');
+            const cluster = consultar('eks', 'describe-cluster', '--name', clusterName).cluster;
+            if (
+              cluster?.arn !== 'arn:aws:eks:' + env.AWS_REGION + ':' + conta + ':cluster/' + clusterName ||
+              cluster.status !== 'ACTIVE' ||
+              cluster.tags?.Repository !== 'oficina-mecanica-infra-kubernetes' ||
+              cluster.tags?.Environment !== 'development'
+            )
+              throw new FalhaConfiguracao('Cluster divergente ou indisponível.');
+            const registryName = parametro('kubernetes/orcamento_pagamento_ecr_repository_name');
+            const registryUrl = parametro('kubernetes/orcamento_pagamento_ecr_repository_url');
+            const esperado = conta + '.dkr.ecr.' + env.AWS_REGION + '.amazonaws.com/' + nome;
+            const registry = consultar('ecr', 'describe-repositories', '--repository-names', registryName).repositories;
+            if (
+              registryName !== nome ||
+              registryUrl !== esperado ||
+              !Array.isArray(registry) ||
+              registry.length !== 1 ||
+              registry[0].repositoryUri !== esperado ||
+              registry[0].registryId !== conta ||
+              registry[0].imageTagMutability !== 'IMMUTABLE'
+            )
+              throw new FalhaConfiguracao('Registry não corresponde à conta/região/owner.');
+            const database = parametro('rds/orcamento-pagamento/database_name'),
+              secretArn = parametro('rds/orcamento-pagamento/secret_arn');
+            if (
+              database !== 'OficinaMecanicaOrcamentoPagamento' ||
+              !secretArn.startsWith(
+                'arn:aws:secretsmanager:' +
+                  env.AWS_REGION +
+                  ':' +
+                  conta +
+                  ':secret:oficina-mecanica/development/rds/orcamento-pagamento-'
+              )
+            )
+              throw new FalhaConfiguracao('Contrato do banco não é exclusivo.');
+            const meta = consultar('secretsmanager', 'describe-secret', '--secret-id', secretArn);
+            if (
+              meta.ARN !== secretArn ||
+              meta.Name !== 'oficina-mecanica/development/rds/orcamento-pagamento' ||
+              !meta.Tags?.some((t) => t.Key === 'Repository' && t.Value === 'oficina-mecanica-infra-rds')
+            )
+              throw new FalhaConfiguracao('Secret não pertence ao owner RDS.');
+            const c = validarCredencial(
+              JSON.parse(consultar('secretsmanager', 'get-secret-value', '--secret-id', secretArn).SecretString)
+            );
+            const endpoint = parametro('rds/endpoint');
+            if (!/^[a-zA-Z0-9.-]+\.rds\.amazonaws\.com$/.test(endpoint))
+              throw new FalhaConfiguracao('Endpoint RDS inválido.');
+            const remoto = booleano(env.PROCESSAMENTO_REMOTO_ENABLED || 'false', 'PROCESSAMENTO_REMOTO_ENABLED');
+            let filaOs = '';
+            if (remoto) {
+              if (parametro('status/api') !== 'ready') throw new FalhaConfiguracao('Entrada OS ainda não disponível.');
+              filaOs = parametro('api/entrada_queue_url');
+              const arn = parametro('api/entrada_queue_arn');
+              if (
+                filaOs !==
+                  'https://sqs.' +
+                    env.AWS_REGION +
+                    '.amazonaws.com/' +
+                    conta +
+                    '/oficina-mecanica-api-development.fifo' ||
+                arn !== 'arn:aws:sqs:' + env.AWS_REGION + ':' + conta + ':oficina-mecanica-api-development.fifo'
+              )
+                throw new FalhaConfiguracao('Fila de resultados OS divergente.');
+              const atributos = consultar(
+                'sqs',
+                'get-queue-attributes',
+                '--queue-url',
+                filaOs,
+                '--attribute-names',
+                'QueueArn',
+                'FifoQueue'
+              ).Attributes;
+              if (atributos?.QueueArn !== arn || atributos.FifoQueue !== 'true')
+                throw new FalhaConfiguracao('Fila real OS divergente.');
+            }
+            return {
+              aws_region: env.AWS_REGION,
+              ssm_environment_name: 'development',
+              aplicacao_habilitada: true,
+              aplicacao_cluster_name: clusterName,
+              aplicacao_image_uri: registryUrl + ':sha-' + env.GITHUB_SHA,
+              db_connection_string:
+                'Server=tcp:' +
+                endpoint +
+                ',1433;Database=' +
+                database +
+                ';User Id=' +
+                c.username +
+                ';Password=' +
+                c.password +
+                ';Encrypt=True;TrustServerCertificate=True;',
+              jwt_secret: env.JWT_SECRET,
+              jwt_issuer: env.JWT_ISSUER,
+              jwt_audience: env.JWT_AUDIENCE,
+              processamento_remoto_habilitado: remoto,
+              conta_aws: conta,
+              os_entrada_queue_url: filaOs,
+              mercado_pago_ativo: mp,
+              mercado_pago_access_token: mp ? env.MERCADO_PAGO_ACCESS_TOKEN : '',
+              mercado_pago_webhook_secret: mp ? env.MERCADO_PAGO_WEBHOOK_SECRET : '',
+              mercado_pago_recebedor_id: mp ? env.MERCADO_PAGO_RECEBEDOR_ID : '',
+              mercado_pago_url_notificacao: mp ? env.MERCADO_PAGO_URL_NOTIFICACAO : ''
+            };
+          }
+          function lerState() {
+            const f = path.join(process.env.TF_WORKING_DIRECTORY, 'terraform.tfstate');
+            return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : { resources: [] };
+          }
+          function clusterDoState(s) {
+            const clusters = (s.resources || [])
+              .filter((r) => r.mode === 'data' && r.type === 'aws_eks_cluster' && r.name === 'aplicacao')
+              .flatMap((r) => (r.instances || []).map((i) => i.attributes?.name));
+            if (clusters.length > 1 || clusters.some((c) => !/^oficina-mecanica-eks-[a-z0-9-]+$/.test(c || '')))
+              throw new FalhaConfiguracao('Cluster do state inválido.');
+            if (
+              (s.resources || []).some((r) => r.mode === 'managed' && tipos.includes(r.type) && r.instances?.length) &&
+              clusters.length !== 1
+            )
+              throw new FalhaConfiguracao('Workload sem identidade do cluster no state.');
+            return clusters[0] || '';
+          }
+          function kube(cluster) {
+            const file = path.join(process.env.RUNNER_TEMP, 'orcamento-pagamento.kubeconfig');
+            chamada('aws', [
+              'eks',
+              'update-kubeconfig',
+              '--name',
+              cluster,
+              '--region',
+              process.env.AWS_REGION,
+              '--kubeconfig',
+              file
+            ]);
+            fs.chmodSync(file, 0o600);
+            return (args) => chamada('kubectl', ['--kubeconfig', file, '--request-timeout=30s', ...args]);
+          }
+          function clusterExiste(cluster) {
+            try {
+              const c = aws('eks', 'describe-cluster', '--name', cluster).cluster;
+              if (!c) throw new FalhaConfiguracao('Cluster inválido.');
+              return true;
+            } catch (e) {
+              if (String(e.stderr).includes('(ResourceNotFoundException)')) return false;
+              throw new FalhaConfiguracao('Consulta EKS falhou sem comprovar ausência.');
+            }
+          }
+          function bootstrapVazio() {
+            const resposta = aws('eks', 'list-clusters');
+            if (!Array.isArray(resposta.clusters) || resposta.clusters.some((c) => typeof c !== 'string'))
+              throw new FalhaConfiguracao('Inventário EKS inválido.');
+            for (const cluster of resposta.clusters.filter((c) => /^oficina-mecanica-/.test(c)))
+              if (kube(cluster)(['get', 'namespace', nome, '--ignore-not-found', '-o', 'name']))
+                throw new FalhaConfiguracao('Namespace próprio existe sem state; recuperação bloqueada.');
+          }
+          function main(modo) {
+            const dir = process.env.TF_WORKING_DIRECTORY;
+            if (modo === 'vars') {
+              let v;
+              if (process.env.TERRAFORM_ACTION === 'destroy') {
+                const cluster = clusterDoState(lerState());
+                v = {
+                  aws_region: process.env.AWS_REGION,
+                  ssm_environment_name: 'development',
+                  aplicacao_habilitada: !!cluster,
+                  aplicacao_cluster_name: cluster,
+                  aplicacao_image_uri:
+                    '000000000000.dkr.ecr.us-east-1.amazonaws.com/' + nome + ':sha-' + '0'.repeat(40),
+                  db_connection_string: 'destroy-only',
+                  jwt_secret: 'destroy-only-placeholder-000000000000',
+                  conta_aws: ''
+                };
+              } else v = configuracao(process.env, aws);
+              fs.writeFileSync(path.join(dir, 'zz_ci.auto.tfvars.json'), JSON.stringify(v), { mode: 0o600 });
+              if (process.env.GITHUB_OUTPUT)
+                fs.appendFileSync(
+                  process.env.GITHUB_OUTPUT,
+                  'ecr_image_uri=' + v.aplicacao_image_uri + '\neks_cluster_name=' + v.aplicacao_cluster_name + '\n'
+                );
+            } else if (modo === 'bootstrap') bootstrapVazio();
+            else if (modo === 'invalidate') {
+              const s = lerState(),
+                nomeStatus = '/oficina-mecanica/development/status/orcamento-pagamento-aplicacao';
+              const conta = aws('sts', 'get-caller-identity').Account;
+              const entradas = (s.resources || [])
+                .filter(
+                  (r) =>
+                    r.mode === 'managed' &&
+                    r.type === 'aws_ssm_parameter' &&
+                    r.name === 'orcamento_pagamento_aplicacao_status'
+                )
+                .flatMap((r) => r.instances || []);
+              let atual;
+              try {
+                atual = aws('ssm', 'get-parameter', '--name', nomeStatus).Parameter;
+              } catch (e) {
+                if (!String(e.stderr).includes('(ParameterNotFound)'))
+                  throw new FalhaConfiguracao('Disponibilidade não comprovada.');
+              }
+              if (atual) {
+                const arn = 'arn:aws:ssm:' + process.env.AWS_REGION + ':' + conta + ':parameter' + nomeStatus;
+                if (
+                  entradas.length !== 1 ||
+                  entradas[0].attributes?.name !== nomeStatus ||
+                  entradas[0].attributes?.arn !== arn ||
+                  atual.Name !== nomeStatus ||
+                  atual.ARN !== arn ||
+                  atual.Type !== 'String' ||
+                  !['ready', 'implantacao-pendente'].includes(atual.Value)
+                )
+                  throw new FalhaConfiguracao('Disponibilidade sem ownership.');
+                aws(
+                  'ssm',
+                  'put-parameter',
+                  '--name',
+                  nomeStatus,
+                  '--type',
+                  'String',
+                  '--value',
+                  'implantacao-pendente',
+                  '--overwrite'
+                );
+              }
+            } else if (modo === 'before-destroy') {
+              const cluster = clusterDoState(lerState());
+              fs.writeFileSync(
+                path.join(dir, 'aplicacao-destroy-context.json'),
+                JSON.stringify({ cluster, namespace: nome })
+              );
+              if (cluster) {
+                try {
+                  aws('ssm', 'get-parameter', '--name', '/oficina-mecanica/development/status/api-gateway');
+                  throw new FalhaConfiguracao('Remova Gateway antes do workload.');
+                } catch (e) {
+                  if (!String(e.stderr).includes('(ParameterNotFound)'))
+                    throw new FalhaConfiguracao('Ausência do Gateway não comprovada; destroy bloqueado.');
+                }
+              }
+            } else if (modo === 'after-destroy') {
+              const c = JSON.parse(fs.readFileSync(path.join(dir, 'aplicacao-destroy-context.json'), 'utf8'));
+              if (c.namespace !== nome) throw new FalhaConfiguracao('Contexto de remoção divergente.');
+              if (
+                c.cluster &&
+                clusterExiste(c.cluster) &&
+                kube(c.cluster)(['get', 'namespace', nome, '--ignore-not-found', '-o', 'name'])
+              )
+                throw new FalhaConfiguracao('Namespace próprio ainda existe.');
+            } else throw new FalhaConfiguracao('Operação da aplicação desconhecida.');
+            console.log('Composição da aplicação validada: ' + modo + '. Nenhum valor sensível exibido.');
+          }
+          module.exports = {
+            main,
+            nome,
+            tipos,
+            booleano,
+            validarRecurso,
+            validarMetadados,
+            validarPlanoRecurso,
+            validarCredencial,
+            configuracao,
+            clusterDoState
+          };
+          if (require.main === module) {
+            try {
+              main(process.argv[2]);
+            } catch (erro) {
+              console.error(
+                erro instanceof FalhaConfiguracao
+                  ? erro.message
+                  : 'Composição de Orçamento/Pagamento não confirmada; detalhes sensíveis omitidos.'
+              );
+              process.exit(1);
+            }
+          }
+
+          VALIDAR_APLICACAO
+
+      - name: "🔐 Preparar proteção dos artefatos"
+        run: &protecao_artefatos |
+          cat > "$RUNNER_TEMP/proteger-artefatos.cjs" <<'PROTEGER_ARTEFATOS'
+          'use strict';
+          const fs = require('node:fs'),
+            path = require('node:path'),
+            crypto = require('node:crypto');
+          const stateFiles = ['terraform.tfstate', 'terraform.tfstate.backup'];
+          const planFiles = [
+            'tfplan',
+            'tfplan.sha256',
+            'source-commit.txt',
+            'plan-context.json',
+            'mensageria-destroy-context.json',
+            'aplicacao-destroy-context.json'
+          ];
+          function chave(valor) {
+            if (!/^[a-f0-9]{64}$/.test(valor || '')) throw Error('Chave protegida de 256 bits ausente.');
+            return Buffer.from(valor, 'hex');
+          }
+          function contexto(env, alvo) {
+            if (
+              !/^\d{12}$/.test(env.AWS_ACCOUNT_ID || '') ||
+              env.SSM_ENVIRONMENT_NAME !== 'development' ||
+              !/^oficina-mecanica-soat\/oficina-mecanica-orcamento-pagamento$/.test(env.GITHUB_REPOSITORY || '')
+            )
+              throw Error('Escopo protegido inválido.');
+            let c = [env.GITHUB_REPOSITORY, env.AWS_ACCOUNT_ID, env.SSM_ENVIRONMENT_NAME, alvo];
+            if (alvo === 'plan') {
+              if (
+                !/^\d+$/.test(env.GITHUB_RUN_ID || '') ||
+                !/^\d+$/.test(env.GITHUB_RUN_ATTEMPT || '') ||
+                !/^[a-f0-9]{40}$/.test(env.GITHUB_SHA || '')
+              )
+                throw Error('Tentativa protegida inválida.');
+              c.push(env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT, env.GITHUB_SHA);
+            }
+            return c.join('|');
+          }
+          function selar(bytes, key, aad) {
+            const iv = crypto.randomBytes(12),
+              c = crypto.createCipheriv('aes-256-gcm', key, iv);
+            c.setAAD(Buffer.from(aad));
+            const data = Buffer.concat([c.update(bytes), c.final()]);
+            return JSON.stringify({
+              versao: 1,
+              iv: iv.toString('base64'),
+              tag: c.getAuthTag().toString('base64'),
+              dados: data.toString('base64')
+            });
+          }
+          function abrir(serializado, key, aad) {
+            const e = JSON.parse(serializado);
+            if (e.versao !== 1 || Object.keys(e).sort().join(',') !== 'dados,iv,tag,versao')
+              throw Error('Envelope protegido inválido.');
+            const iv = Buffer.from(e.iv, 'base64'),
+              tag = Buffer.from(e.tag, 'base64');
+            if (iv.length !== 12 || tag.length !== 16) throw Error('Autenticação inválida.');
+            const d = crypto.createDecipheriv('aes-256-gcm', key, iv);
+            d.setAAD(Buffer.from(aad));
+            d.setAuthTag(tag);
+            return Buffer.concat([d.update(Buffer.from(e.dados, 'base64')), d.final()]);
+          }
+          function main(modo, env = process.env) {
+            const dir = env.TF_WORKING_DIRECTORY,
+              key = chave(env.TERRAFORM_STATE_KEY);
+            if (!dir) throw Error('Diretório protegido ausente.');
+            if (modo === 'state-open' || modo === 'state-seal') {
+              const aad = contexto(env, 'state');
+              for (const nome of stateFiles) {
+                const raw = path.join(dir, nome),
+                  enc = raw + '.enc';
+                if (modo === 'state-open') {
+                  if (fs.existsSync(raw)) throw Error('State plaintext inesperado antes de restaurar.');
+                  if (fs.existsSync(enc))
+                    fs.writeFileSync(raw, abrir(fs.readFileSync(enc, 'utf8'), key, aad + '|' + nome), { mode: 0o600 });
+                } else if (fs.existsSync(raw))
+                  fs.writeFileSync(enc, selar(fs.readFileSync(raw), key, aad + '|' + nome), { mode: 0o600 });
+              }
+              return;
+            }
+            const bundle = path.join(dir, 'tfplan.bundle.enc'),
+              aad = contexto(env, 'plan');
+            if (modo === 'plan-seal') {
+              const arquivos = {};
+              for (const nome of planFiles) {
+                const f = path.join(dir, nome);
+                if (fs.existsSync(f)) arquivos[nome] = fs.readFileSync(f).toString('base64');
+              }
+              for (const nome of planFiles.slice(0, 4))
+                if (!arquivos[nome]) throw Error('Plano obrigatório incompleto.');
+              fs.writeFileSync(bundle, selar(Buffer.from(JSON.stringify(arquivos)), key, aad), { mode: 0o600 });
+            } else if (modo === 'plan-open') {
+              const arquivos = JSON.parse(abrir(fs.readFileSync(bundle, 'utf8'), key, aad));
+              if (!arquivos || Array.isArray(arquivos) || Object.keys(arquivos).some((n) => !planFiles.includes(n)))
+                throw Error('Pacote tenta gravar arquivo fora do plano.');
+              for (const nome of planFiles.slice(0, 4))
+                if (typeof arquivos[nome] !== 'string' || !arquivos[nome]) throw Error('Plano obrigatório ausente.');
+              for (const [nome, dados] of Object.entries(arquivos)) {
+                if (typeof dados !== 'string') throw Error('Conteúdo inválido.');
+                fs.writeFileSync(path.join(dir, nome), Buffer.from(dados, 'base64'), { mode: 0o600 });
+              }
+            } else throw Error('Operação protegida desconhecida.');
+          }
+          module.exports = { chave, contexto, selar, abrir, main };
+          if (require.main === module) {
+            try {
+              main(process.argv[2]);
+              console.log('Artefatos protegidos: ' + process.argv[2] + '.');
+            } catch {
+              console.error('Proteção dos artefatos falhou; não publicar nem substituir state.');
+              process.exit(1);
+            }
+          }
+
+          PROTEGER_ARTEFATOS
+
+      - name: "🛡️ Preparar recuperação declarativa de destroy"
+        run: &recuperacao_destroy |
+          cat > "$RUNNER_TEMP/prepare-destroy-orcamento.cjs" <<'PREPARAR_DESTROY'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const cp = require('node:child_process');
+
+          function destroyConfig(state, region, confirmClusterAbsent) {
+            const resources = state.resources || [];
+            if (resources.some((r) => /module\..*provider\[/.test(r.provider || ''))) {
+              throw new Error('Provider definido dentro de módulo exige tratamento específico; destroy bloqueado.');
+            }
+            const kubernetes = resources.filter((r) => r.mode === 'managed' && r.type.startsWith('kubernetes_'));
+            let config = `provider "aws" { region = ${JSON.stringify(region)} }\n`;
+            if (kubernetes.length) {
+              const clusters = resources
+                .filter((r) => r.mode === 'data' && r.type === 'aws_eks_cluster')
+                .flatMap((r) => (r.instances || []).map((i) => i.attributes?.name))
+                .filter(Boolean);
+              if (!clusters.length)
+                throw new Error('State Kubernetes sem nome comprovável de cluster; recuperação bloqueada.');
+              if ([...new Set(clusters)].some((cluster) => confirmClusterAbsent(cluster) === false)) return null;
+              config += 'provider "kubernetes" {\n host = "https://127.0.0.1"\n token = "destroy-only"\n}\n';
+              for (const r of kubernetes) {
+                if (r.module || !/^kubernetes_\w+$/.test(r.type) || !/^\w+$/.test(r.name)) {
+                  throw new Error('Endereço Kubernetes não suportado; recuperação bloqueada.');
+                }
+                config += `removed {\n from = ${r.type}.${r.name}\n lifecycle { destroy = false }\n}\n`;
+              }
+            }
+            return config;
+          }
+
+          function verifyPlan(plan) {
+            for (const change of plan.resource_changes || []) {
+              if ((change.change?.actions || []).some((a) => !['no-op', 'delete', 'forget', 'read'].includes(a))) {
+                throw new Error(`Plano de destroy contém ação proibida: ${change.address}`);
+              }
+            }
+          }
+
+          function main() {
+            if (process.env.TERRAFORM_ACTION !== 'destroy')
+              throw new Error('Este procedimento aceita somente destroy.');
+            const dir = process.env.TF_WORKING_DIRECTORY;
+            if (!dir) throw new Error('Diretório Terraform ausente.');
+            const run = (cmd, args) =>
+              cp.execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+            if (process.argv[2] === 'verify-plan') {
+              verifyPlan(JSON.parse(run('terraform', [`-chdir=${dir}`, 'show', '-json', 'tfplan'])));
+              console.log('Plano validado: nenhuma criação ou atualização permitida.');
+              return;
+            }
+            if (process.argv[2] === 'verify-state') {
+              const state = JSON.parse(fs.readFileSync(path.join(dir, 'terraform.tfstate'), 'utf8'));
+              if ((state.resources || []).some((r) => r.mode === 'managed' && r.instances?.length)) {
+                throw new Error('State ainda contém recursos gerenciados; reconciliação incompleta.');
+              }
+              console.log('State final sem recursos gerenciados; cache pode ser persistido.');
+              return;
+            }
+            const identity = JSON.parse(run('aws', ['sts', 'get-caller-identity', '--output', 'json']));
+            console.log(`Destroy na conta AWS ${identity.Account}.`);
+            const stateFile = path.join(dir, 'terraform.tfstate');
+            const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { resources: [] };
+            const config = destroyConfig(state, process.env.AWS_REGION || 'us-east-1', (cluster) => {
+              try {
+                run('aws', ['eks', 'describe-cluster', '--name', cluster, '--output', 'json']);
+              } catch (error) {
+                if (!String(error.stderr).includes('(ResourceNotFoundException)')) {
+                  throw new Error('Consulta EKS falhou sem confirmar ausência; recuperação bloqueada.');
+                }
+                console.log('EKS comprovadamente ausente; remoção declarativa dos vínculos Kubernetes no plano.');
+                return;
+              }
+              return false;
+            });
+            if (config === null) {
+              console.log('EKS existente: preservada a configuração normal para destruir o workload.');
+              return;
+            }
+            const backup = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP, 'destroy-config-'));
+            for (const name of fs.readdirSync(dir)) {
+              if ((name.endsWith('.tf') || name.endsWith('.tf.json')) && name !== 'versions.tf') {
+                fs.renameSync(path.join(dir, name), path.join(backup, name));
+              }
+            }
+            fs.writeFileSync(path.join(dir, 'destroy_only.tf'), config);
+            console.log('Configuração temporária exclusiva de destroy; state preservado integralmente.');
+          }
+
+          module.exports = { destroyConfig, verifyPlan };
+          if (require.main === module) {
+            try {
+              main();
+            } catch (error) {
+              console.error(error.message);
+              process.exit(1);
+            }
+          }
+
+          PREPARAR_DESTROY
 
       - name: "🛡️ Conferir habilitação do deploy AWS"
         env:
@@ -280,14 +1126,45 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
-          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-plan
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.enc
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup.enc
+          key: tfstate-enc-v1-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-plan
           restore-keys: |
-            tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+            tfstate-enc-v1-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+
+      - name: "🛠️ Preparar consultas Kubernetes"
+        uses: azure/setup-kubectl@v5
+
+      - name: "🔐 Restaurar state autenticado da conta e ambiente"
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws_credentials.outputs.aws-account-id }}
+        run: node "$RUNNER_TEMP/proteger-artefatos.cjs" state-open
 
       - name: "🛡️ 05 · Validar ownership e bootstrap do state"
-        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+        run: |
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+          if [ ! -f "$TF_WORKING_DIRECTORY/terraform.tfstate" ]; then
+            node "$RUNNER_TEMP/aplicacao-orcamento.cjs" bootstrap
+          fi
+
+
+      - name: "📝 Preparar composição com contratos exclusivos"
+        id: prepare_vars
+        env:
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          JWT_ISSUER: ${{ vars.JWT_ISSUER || 'oficina-mecanica-auth' }}
+          JWT_AUDIENCE: ${{ vars.JWT_AUDIENCE || 'oficina-mecanica-api' }}
+          PROCESSAMENTO_REMOTO_ENABLED: ${{ vars.PROCESSAMENTO_REMOTO_ENABLED || 'false' }}
+          MERCADO_PAGO_ATIVO: ${{ vars.MERCADO_PAGO_ATIVO || 'false' }}
+          MERCADO_PAGO_ACCESS_TOKEN: ${{ secrets.MERCADO_PAGO_ACCESS_TOKEN }}
+          MERCADO_PAGO_WEBHOOK_SECRET: ${{ secrets.MERCADO_PAGO_WEBHOOK_SECRET }}
+          MERCADO_PAGO_RECEBEDOR_ID: ${{ vars.MERCADO_PAGO_RECEBEDOR_ID }}
+          MERCADO_PAGO_URL_NOTIFICACAO: ${{ vars.MERCADO_PAGO_URL_NOTIFICACAO }}
+        run: node "$RUNNER_TEMP/aplicacao-orcamento.cjs" vars
+
+      - name: "🛡️ Preparar configuração exclusiva de destroy"
+        if: env.TERRAFORM_ACTION == 'destroy'
+        run: node "$RUNNER_TEMP/prepare-destroy-orcamento.cjs"
 
       - name: "🚀 06 · Inicializar e validar Terraform"
         run: |
@@ -296,7 +1173,9 @@ jobs:
 
       - name: "🛡️ 07 · Conferir produtor e filas antes do destroy"
         if: env.TERRAFORM_ACTION == 'destroy'
-        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" before-destroy
+        run: |
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" before-destroy
+          node "$RUNNER_TEMP/aplicacao-orcamento.cjs" before-destroy
 
       - name: "📐 08 · Gerar plano salvo"
         env:
@@ -309,39 +1188,129 @@ jobs:
           else
             terraform -chdir="$TF_WORKING_DIRECTORY" plan -input=false -out=tfplan
           fi
+          export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           node "$RUNNER_TEMP/mensageria-orcamento.cjs" plan
           cd "$TF_WORKING_DIRECTORY"
           sha256sum tfplan > tfplan.sha256
           printf '%s' "$GITHUB_SHA" > source-commit.txt
+          cd "$GITHUB_WORKSPACE"
+          node "$RUNNER_TEMP/proteger-artefatos.cjs" plan-seal
 
       - name: "⬆️ 09 · Publicar plano desta tentativa"
         uses: actions/upload-artifact@v7
         with:
           name: tfplan-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ env.TF_WORKING_DIRECTORY }}/tfplan
-            ${{ env.TF_WORKING_DIRECTORY }}/tfplan.sha256
-            ${{ env.TF_WORKING_DIRECTORY }}/source-commit.txt
-            ${{ env.TF_WORKING_DIRECTORY }}/plan-context.json
-            ${{ env.TF_WORKING_DIRECTORY }}/mensageria-destroy-context.json
+          path: ${{ env.TF_WORKING_DIRECTORY }}/tfplan.bundle.enc
           if-no-files-found: error
           retention-days: 3
 
+      - name: "🧹 Remover variáveis temporárias sensíveis"
+        if: always()
+        run: rm -f "$TF_WORKING_DIRECTORY/zz_ci.auto.tfvars.json"
+
+  build_and_push_image:
+    name: "🐳 03 · Publicar imagem produzida pela CI"
+    needs:
+      - resolve_action
+      - prepare_and_plan
+    if: needs.resolve_action.outputs.terraform_action == 'apply'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment_name }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      ECR_IMAGE_URI: ${{ needs.prepare_and_plan.outputs.ecr_image_uri }}
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛡️ Conferir habilitação do deploy AWS"
+        env:
+          DEPLOY_ENABLED: ${{ vars.AWS_DEPLOY_ENABLED }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment_name }}
+          TF_ENVIRONMENT: ${{ inputs.terraform_environment_directory }}
+        run: |
+          test "$DEPLOY_ENABLED" = true
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$DEPLOY_ENVIRONMENT" = development
+          test "$TF_ENVIRONMENT" = dev
+          test "$SSM_ENVIRONMENT_NAME" = development
+
+      - name: "🔑 02 · Configurar credenciais AWS"
+        uses: aws-actions/configure-aws-credentials@v6
+        id: aws_credentials
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "🔓 03 · Login no Amazon ECR"
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: "🔎 04 · Localizar a CI do PR que foi integrado"
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq ".[] | select(.merged_at != null and .base.ref == \"develop\" and .merge_commit_sha == \"$GITHUB_SHA\") | .number" | head -n 1)"
+          test -n "$pr_number" || { echo "::error::PR integrado não encontrado."; exit 1; }
+          head_sha="$(gh pr view "$pr_number" --json headRefOid --jq .headRefOid)"
+          run_id="$(gh run list --workflow ci.yml --commit "$head_sha" --event pull_request --status success --json databaseId --jq '.[0].databaseId // empty')"
+          test -n "$run_id" || { echo "::error::CI aprovada não encontrada para o PR."; exit 1; }
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: "⬇️ 05 · Baixar imagem da CI aprovada"
+        uses: actions/download-artifact@v8
+        with:
+          name: orcamento-pagamento-image-pr-${{ steps.ci.outputs.pr_number }}
+          path: ${{ runner.temp }}/ci-image
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.ci.outputs.run_id }}
+
+      - name: "🧾 06 · Conferir se o conteúdo integrado é o validado"
+        run: |
+          test "$(cat "$RUNNER_TEMP/ci-image/source-tree.txt")" = "$(git rev-parse 'HEAD^{tree}')" || {
+            echo "::error::O conteúdo integrado difere do validado pela CI. Deploy bloqueado."
+            exit 1
+          }
+
+      - name: "📤 07 · Publicar a mesma imagem no ECR"
+        env:
+          IMAGE_ARCHIVE: ${{ runner.temp }}/ci-image/orcamento-pagamento-image.tar
+        run: |
+          docker load --input "$IMAGE_ARCHIVE"
+          docker tag "oficina-mecanica-orcamento-pagamento:ci" "$ECR_IMAGE_URI"
+          docker push "$ECR_IMAGE_URI"
+
   terraform_apply:
-    name: "☁️ 03 · Aplicar ou destruir mensageria"
-    needs: [resolve_action, prepare_and_plan]
+    name: "☁️ 04 · Aplicar ou destruir infraestrutura e aplicação"
+    needs: [resolve_action, prepare_and_plan, build_and_push_image]
+    if: always() && needs.resolve_action.result == 'success' && needs.prepare_and_plan.result == 'success' && (needs.resolve_action.outputs.terraform_action == 'destroy' || needs.build_and_push_image.result == 'success')
     runs-on: ubuntu-latest
     environment:
       name: ${{ inputs.environment_name }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       TERRAFORM_ACTION: ${{ needs.resolve_action.outputs.terraform_action }}
+      TERRAFORM_STATE_KEY: ${{ secrets.TERRAFORM_STATE_KEY }}
     steps:
       - name: "📥 01 · Baixar código do repositório"
         uses: actions/checkout@v7
 
       - name: "🛡️ Preparar validações definidas no workflow"
         run: *validacoes_mensageria
+
+      - name: "🧩 Preparar composição da aplicação"
+        run: *validacoes_aplicacao
+
+      - name: "🔐 Preparar proteção dos artefatos"
+        run: *protecao_artefatos
+
+      - name: "🛡️ Preparar recuperação declarativa de destroy"
+        run: *recuperacao_destroy
 
       - name: "🛡️ Conferir habilitação do deploy AWS"
         env:
@@ -374,14 +1343,33 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
-          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.enc
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup.enc
+          key: tfstate-enc-v1-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
           restore-keys: |
-            tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+            tfstate-enc-v1-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+
+      - name: "🛠️ Preparar consultas Kubernetes"
+        uses: azure/setup-kubectl@v5
+
+      - name: "🔐 Restaurar state autenticado da conta e ambiente"
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws_credentials.outputs.aws-account-id }}
+        run: node "$RUNNER_TEMP/proteger-artefatos.cjs" state-open
 
       - name: "🛡️ 05 · Validar ownership e bootstrap do state"
-        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+        run: |
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+          if [ ! -f "$TF_WORKING_DIRECTORY/terraform.tfstate" ]; then
+            node "$RUNNER_TEMP/aplicacao-orcamento.cjs" bootstrap
+          fi
+
+
+      - name: "📝 Preparar recuperação do destroy sem buscar credenciais SQL"
+        if: env.TERRAFORM_ACTION == 'destroy'
+        run: |
+          node "$RUNNER_TEMP/aplicacao-orcamento.cjs" vars
+          node "$RUNNER_TEMP/prepare-destroy-orcamento.cjs"
 
       - name: "🚀 06 · Inicializar Terraform"
         run: terraform -chdir="$TF_WORKING_DIRECTORY" init -input=false
@@ -392,28 +1380,46 @@ jobs:
           name: tfplan-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.TF_WORKING_DIRECTORY }}
 
+      - name: "🔐 Abrir plano autenticado desta tentativa"
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws_credentials.outputs.aws-account-id }}
+        run: node "$RUNNER_TEMP/proteger-artefatos.cjs" plan-open
+
       - name: "🛡️ 08 · Conferir plano, commit e pendências atuais"
         run: |
           set -euo pipefail
           test "$(cat "$TF_WORKING_DIRECTORY/source-commit.txt")" = "$GITHUB_SHA"
           (cd "$TF_WORKING_DIRECTORY" && sha256sum -c tfplan.sha256)
+          export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
           node "$RUNNER_TEMP/mensageria-orcamento.cjs" plan verify-context
           if [ "$TERRAFORM_ACTION" = destroy ]; then
             node "$RUNNER_TEMP/mensageria-orcamento.cjs" before-destroy
+            node "$RUNNER_TEMP/aplicacao-orcamento.cjs" before-destroy
           fi
+
+      - name: "🚦 Invalidar disponibilidade anterior do workload"
+        if: env.TERRAFORM_ACTION == 'apply'
+        run: node "$RUNNER_TEMP/aplicacao-orcamento.cjs" invalidate
 
       - name: "✅ 09 · Aplicar exclusivamente o plano salvo"
         id: apply
         run: terraform -chdir="$TF_WORKING_DIRECTORY" apply -input=false -auto-approve tfplan
 
-      - name: "💾 10 · Preservar state final, inclusive após falha parcial"
+      - name: "🔐 Proteger state final, inclusive após falha parcial"
+        id: proteger_state
         if: always() && steps.apply.outcome != 'skipped' && steps.apply.outcome != ''
+        env:
+          AWS_ACCOUNT_ID: ${{ steps.aws_credentials.outputs.aws-account-id }}
+        run: node "$RUNNER_TEMP/proteger-artefatos.cjs" state-seal
+
+      - name: "💾 10 · Preservar state final, inclusive após falha parcial"
+        if: always() && steps.proteger_state.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: |
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
-            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
-          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.enc
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup.enc
+          key: tfstate-enc-v1-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
 
       - name: "🔎 11 · Validar recursos reais e contratos após apply"
         if: env.TERRAFORM_ACTION == 'apply'
@@ -421,4 +1427,73 @@ jobs:
 
       - name: "🔎 11 · Validar state vazio e ausência real após destroy"
         if: env.TERRAFORM_ACTION == 'destroy'
-        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" after-destroy
+        run: |
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" after-destroy
+          node "$RUNNER_TEMP/aplicacao-orcamento.cjs" after-destroy
+
+  rollout_check:
+    name: "☸️ 05 · Validar rollout da aplicação no EKS"
+    needs: [resolve_action, prepare_and_plan, terraform_apply]
+    if: needs.resolve_action.outputs.terraform_action == 'apply' && needs.terraform_apply.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment_name }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      EKS_CLUSTER_NAME: ${{ needs.prepare_and_plan.outputs.eks_cluster_name }}
+      ECR_IMAGE_URI: ${{ needs.prepare_and_plan.outputs.ecr_image_uri }}
+    steps:
+      - name: "🛡️ Conferir habilitação do deploy AWS"
+        env:
+          DEPLOY_ENABLED: ${{ vars.AWS_DEPLOY_ENABLED }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment_name }}
+          TF_ENVIRONMENT: ${{ inputs.terraform_environment_directory }}
+        run: |
+          test "$DEPLOY_ENABLED" = true
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$DEPLOY_ENVIRONMENT" = development
+          test "$TF_ENVIRONMENT" = dev
+          test "$SSM_ENVIRONMENT_NAME" = development
+
+      - name: "🔑 01 · Configurar credenciais AWS"
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "🛠️ 02 · Instalar kubectl"
+        uses: azure/setup-kubectl@v5
+
+      - name: "🔗 03 · Configurar kubeconfig do EKS"
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER_NAME" --kubeconfig "$RUNNER_TEMP/rollout.kubeconfig"
+
+      - name: "⏳ 04 · Conferir rollout, imagem e Service próprios"
+        env:
+          KUBECONFIG: ${{ runner.temp }}/rollout.kubeconfig
+        run: |
+          set -euo pipefail
+          namespace=oficina-mecanica-orcamento-pagamento
+          kubectl rollout status deployment/oficina-mecanica-orcamento-pagamento -n "$namespace" --timeout=600s
+          test "$(kubectl get deployment oficina-mecanica-orcamento-pagamento -n "$namespace" -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$ECR_IMAGE_URI"
+          test "$(kubectl get service oficina-mecanica-orcamento-pagamento -n "$namespace" -o jsonpath='{.spec.type}')" = NodePort
+          test "$(kubectl get service oficina-mecanica-orcamento-pagamento -n "$namespace" -o jsonpath='{.spec.ports[0].nodePort}')" = 30082
+          kubectl get hpa oficina-mecanica-orcamento-pagamento-hpa -n "$namespace"
+          kubectl get pods -n "$namespace" -o wide
+
+      - name: "🩺 05 · Validar health privado antes de liberar disponibilidade"
+        env:
+          KUBECONFIG: ${{ runner.temp }}/rollout.kubeconfig
+        run: |
+          set -euo pipefail
+          kubectl port-forward -n oficina-mecanica-orcamento-pagamento service/oficina-mecanica-orcamento-pagamento 18082:80 >/dev/null 2>&1 &
+          forward_pid=$!
+          trap 'kill "$forward_pid" 2>/dev/null || true' EXIT
+          curl --silent --fail --max-time 5 --retry 15 --retry-delay 2 --retry-all-errors --output /dev/null http://127.0.0.1:18082/api/health
+          aws ssm put-parameter --name /oficina-mecanica/development/status/orcamento-pagamento-aplicacao --type String --value ready --overwrite >/dev/null
+          test "$(aws ssm get-parameter --name /oficina-mecanica/development/status/orcamento-pagamento-aplicacao --query Parameter.Value --output text)" = ready
+
+      - name: "🧹 06 · Remover kubeconfig temporário"
+        if: always()
+        run: rm -f "$RUNNER_TEMP/rollout.kubeconfig"

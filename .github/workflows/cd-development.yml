@@ -1,5 +1,5 @@
 name: "🚀 CD Development"
-run-name: "🚀 Infraestrutura de mensageria em development"
+run-name: "🚀 Deploy em development"
 
 on:
   push:
@@ -8,15 +8,30 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
+  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
-  # Este estágio implanta somente mensageria; não promove código da aplicação.
-  DEPLOYABLE_PATHS: '["infra/terraform", ".github/workflows/aws-deploy.yml"]'
+  RELEASE_BRANCH: ${{ vars.RELEASE_BRANCH || 'release' }}
+  DEPLOYABLE_PATHS: >-
+    [
+      "Dockerfile",
+      ".dockerignore",
+      "OficinaMecanica.OrcamentoPagamento.sln",
+      "Directory.Build.props",
+      "Directory.Build.targets",
+      "Directory.Packages.props",
+      "global.json",
+      "NuGet.config",
+      "src",
+      "k8s",
+      "infra/terraform",
+      ".github/workflows/aws-deploy.yml"
+    ]
 
 jobs:
   detect-deploy-scope:
@@ -63,3 +78,142 @@ jobs:
       terraform_environment_directory: dev
       ssm_environment_name: development
     secrets: inherit
+
+  open-pr-to-release:
+    name: "🔀 03 · Abrir PR para release"
+    runs-on: ubuntu-latest
+    needs:
+      - detect-deploy-scope
+      - deploy-development
+    if: >-
+      !cancelled() &&
+      vars.AUTO_PR_ENABLED == 'true' &&
+      needs.detect-deploy-scope.result == 'success' &&
+      (needs.deploy-development.result == 'success' ||
+       (needs.detect-deploy-scope.outputs.deploy_required == 'false' &&
+        needs.deploy-development.result == 'skipped'))
+    env:
+      TERRAFORM_ACTION: ${{ needs.deploy-development.outputs.terraform_action }}
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: "🔎 Conferir conteúdo cumulativo antes da promoção"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_RESULT: ${{ needs.deploy-development.result }}
+        run: |
+          node <<'VALIDAR_PROMOCAO_CUMULATIVA'
+          function validarPromocao({ git, consultar, caminhos, base, head, resultadoAtual, acaoAtual }) {
+            const alterados = git(['diff', '--name-only', base, head, '--', ...caminhos]).trim();
+            if (!alterados) return 'SEM_ALTERACAO_IMPLANTAVEL';
+
+            if (resultadoAtual === 'success' && ['apply', 'destroy'].includes(acaoAtual)) {
+              return 'OPERACAO_ATUAL_CONFIRMADA';
+            }
+
+            // O primeiro parent identifica o push em develop, inclusive após merge de feature.
+            const commit = git(['log', '--first-parent', '-1', '--format=%H', head, '--', ...caminhos]).trim();
+            if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('Commit implantável não identificado.');
+
+            const paginas = consultar('actions/workflows/cd-development.yml/runs?branch=develop&event=push&head_sha=' + commit + '&per_page=100');
+            if (!Array.isArray(paginas) || paginas.some(p => !Array.isArray(p.workflow_runs))) {
+              throw new Error('Histórico de CD inválido.');
+            }
+
+            const execucao = paginas.flatMap(p => p.workflow_runs)
+              .filter(r => r.head_sha === commit && r.head_branch === 'develop' && r.event === 'push')
+              .sort((a, b) => b.id - a.id)[0];
+            if (!execucao || execucao.status !== 'completed' || execucao.conclusion !== 'success' ||
+                !Number.isSafeInteger(execucao.id) || !Number.isSafeInteger(execucao.run_attempt) || execucao.run_attempt < 1) {
+              throw new Error('Conteúdo implantável pendente sem CD concluído com sucesso.');
+            }
+
+            // Usar a tentativa atual; sucesso de uma tentativa antiga não cobre um rerun falho.
+            const tentativas = consultar('actions/runs/' + execucao.id + '/attempts/' + execucao.run_attempt + '/jobs?per_page=100');
+            if (!Array.isArray(tentativas) || tentativas.some(p => !Array.isArray(p.jobs))) {
+              throw new Error('Jobs do CD inválidos.');
+            }
+
+            const aplicacoes = tentativas.flatMap(p => p.jobs).filter(j =>
+              j.name === '☁️ 02 · Deploy em development / ☁️ 04 · Aplicar ou destruir infraestrutura e aplicação');
+            if (aplicacoes.length !== 1 || aplicacoes[0].conclusion !== 'success') {
+              throw new Error('CD sem aplicação/destroy confirmado; documentação não libera código pendente.');
+            }
+
+            return 'OPERACAO_ANTERIOR_CONFIRMADA';
+          }
+
+          // Execução no runner: erros de Git/GitHub bloqueiam a promoção.
+          const cp = require('node:child_process');
+          const git = args => cp.execFileSync('git', args, { encoding: 'utf8' });
+          const caminhos = JSON.parse(process.env.DEPLOYABLE_PATHS);
+          const release = 'refs/remotes/origin/' + process.env.RELEASE_BRANCH;
+          const referencia = cp.spawnSync('git', ['show-ref', '--verify', '--quiet', release]);
+          if (![0, 1].includes(referencia.status)) throw new Error('Não foi possível consultar a referência release.');
+          const base = referencia.status === 0 ? release : 'refs/remotes/origin/main';
+          const consultar = endpoint => JSON.parse(cp.execFileSync('gh', [
+            'api', '--paginate', '--slurp', 'repos/' + process.env.GITHUB_REPOSITORY + '/' + endpoint
+          ], { encoding: 'utf8' }));
+          const resultado = validarPromocao({
+            git, consultar, caminhos, base, head: process.env.GITHUB_SHA,
+            resultadoAtual: process.env.DEPLOY_RESULT, acaoAtual: process.env.TERRAFORM_ACTION
+          });
+          console.log('Conferência cumulativa de promoção: ' + resultado);
+          VALIDAR_PROMOCAO_CUMULATIVA
+
+      - name: "🔀 02 · Criar ou manter PR para release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          case "$TERRAFORM_ACTION" in
+            "")
+              promotion_message="PR automático de alterações sem necessidade de deploy em development. O merge continua manual."
+              ;;
+            apply)
+              promotion_message="PR automático após deploy bem-sucedido em development. O merge continua manual."
+              ;;
+            destroy)
+              promotion_message="PR automático após destroy bem-sucedido em development. Registra a remoção; release não executa Terraform."
+              ;;
+            *)
+              echo "::error::Ação do CD não reconhecida. Promoção bloqueada."
+              exit 1
+              ;;
+          esac
+
+          if ! git ls-remote --exit-code --heads origin "$RELEASE_BRANCH"; then
+            echo "Release branch '$RELEASE_BRANCH' does not exist. Creating it from main."
+            git fetch origin main
+            git switch --create "$RELEASE_BRANCH" origin/main
+            git push origin "$RELEASE_BRANCH"
+          fi
+
+          git fetch origin develop "$RELEASE_BRANCH"
+
+          if [ "$(git rev-parse "origin/develop")" != "$GITHUB_SHA" ]; then
+            echo "Branch avançou após este commit. A promoção cabe ao CD do novo commit."
+            exit 0
+          fi
+
+          pending_commits="$(git rev-list --count "origin/$RELEASE_BRANCH..origin/develop")"
+          if [ "$pending_commits" -eq 0 ]; then
+            echo "No pending commits from develop to $RELEASE_BRANCH."
+            exit 0
+          fi
+
+          existing_pr="$(gh pr list --base "$RELEASE_BRANCH" --head develop --state open --json number --jq '.[0].number // empty')"
+
+          if [ -n "$existing_pr" ]; then
+            echo "Pull request #$existing_pr already exists for develop -> $RELEASE_BRANCH."
+            exit 0
+          fi
+
+          gh pr create \
+            --base "$RELEASE_BRANCH" \
+            --head develop \
+            --title "ci(release): deploy develop to $RELEASE_BRANCH" \
+            --body "$promotion_message"

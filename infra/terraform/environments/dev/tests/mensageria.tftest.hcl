@@ -1,3 +1,5 @@
+mock_provider "kubernetes" {}
+
 mock_provider "aws" {
   override_during = plan
 }
