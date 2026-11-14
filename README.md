@@ -136,7 +136,7 @@ O publicador trabalha em um loop separado, para que a espera do consumidor não 
 
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
 
-Neste bootstrap não existem jobs de Kubernetes/Terraform ou CD: os respectivos recursos ainda não foram implementados. Esses jobs e as promoções devem ser derivados das esteiras maduras quando essa frente estiver pronta; não usar um workflow vazio ou um job sempre verde como substituto de deploy. Não há publicação de imagem em registry, operação AWS ou merge automático nesta CI.
+O CI também valida Terraform e os guardrails executáveis da mensageria. O CD atual implanta exclusivamente a entrada FIFO/DLQ e os contratos SSM; não publica imagem nem implanta a aplicação. Por isso, não abre promoções para release/main. O CD completo do workload depende do banco e da credencial próprios, registry e rede; uma fila criada não comprova serviço implantado.
 
 ```powershell
 dotnet restore OficinaMecanica.OrcamentoPagamento.sln
@@ -162,3 +162,26 @@ Os testes do provedor substituto comprovam o comportamento local; não comprovam
 A Infrastructure usa o SDK nativo Datadog 3.50.0, conforme a referência do Execução e a versão do profiler adotada na API. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
 
 A criação/exportação dos spans exige profiler e Agent compatíveis no workload. Os testes locais sem profiler verificam logs, restauração de escopos, filtragem e preservação do carrier; não comprovam ingestão Datadog ou rastreamento distribuído implantado. Não há OpenTelemetry ou novo Agent.
+
+### Infraestrutura de mensageria
+
+O Terraform em `infra/terraform/environments/dev` segue os recursos da API: entrada FIFO por OS, deduplicação explícita, SSE gerenciada pelo SQS, visibilidade de 60 segundos, long polling de 20, cinco recebimentos antes da DLQ e retenções de quatro/14 dias. A política da DLQ permite redrive somente da entrada própria.
+
+Os contratos String são publicados em `/oficina-mecanica/development/orcamento-pagamento/{entrada_queue_url,entrada_queue_arn,dlq_url,dlq_arn}`. O parâmetro `/oficina-mecanica/development/status/orcamento-pagamento=ready` identifica somente essa infraestrutura, sem atestar banco, workload, processamento ou pagamento. Nenhuma credencial é publicada em SSM.
+
+A esteira exige `AWS_DEPLOY_ENABLED=true` no caller e no Environment, ref develop, Environment development e diretório dev. O merge mantém o bloqueio atual. State/cache são isolados por conta e ambiente; plano e artefatos incluem run_id/run_attempt, SHA-256 e vínculo com conta, região, commit e ação. Somente o plano salvo é aplicado, e o state resultante é preservado inclusive após falha parcial.
+
+Sem cache, o primeiro ciclo exige destroy dedicado e consultas que comprovem ausência das filas e contratos deste owner. Não se descarta state nem se adota recurso órfão automaticamente. Um reset do laboratório pode remover as filas; ausência comprovada pode ser reconciliada, enquanto AccessDenied, token expirado ou resposta inválida bloqueiam.
+
+Destroy exige alteração explícita de `terraform-action.env`, confere novamente as pendências antes de aplicar e bloqueia enquanto o contrato do produtor OS existir. Entrada e DLQ precisam estar sem mensagens visíveis, em voo ou atrasadas; os contadores são aproximados e pressupõem produtores parados. Esse guardrail não consulta nem drena Outbox SQL. Após a remoção, a esteira confirma state sem recursos gerenciados e ausência real das filas e dos cinco parâmetros. Não há purge ou redrive automático.
+
+Validação local sem AWS:
+
+```bash
+terraform fmt -check -recursive infra/terraform
+terraform -chdir=infra/terraform/environments/dev init -backend=false -input=false
+terraform -chdir=infra/terraform/environments/dev validate
+terraform -chdir=infra/terraform/environments/dev test
+```
+
+Os testes operacionais ficam inline no CI e executam os mesmos guardrails do CD com respostas substitutas. Eles não comprovam permissões IAM, filas reais ou acesso pelo workload. `TERRAFORM_ACTION=destroy` deve permanecer até a janela autorizada; retorno a apply também pode disparar operação e exige revisão própria.

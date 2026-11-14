@@ -1,0 +1,65 @@
+name: "🚀 CD Development"
+run-name: "🚀 Infraestrutura de mensageria em development"
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # Este estágio implanta somente mensageria; não promove código da aplicação.
+  DEPLOYABLE_PATHS: '["infra/terraform", ".github/workflows/aws-deploy.yml"]'
+
+jobs:
+  detect-deploy-scope:
+    name: "🔎 01 · Detectar se há mudança que exige deploy"
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_required: ${{ steps.detect.outputs.deploy_required }}
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: "🔍 02 · Analisar arquivos alterados"
+        id: detect
+        env:
+          GITHUB_BEFORE: ${{ github.event.before }}
+        run: |
+          node <<'DETECTAR_DEPLOY'
+          const cp = require('node:child_process');
+          const fs = require('node:fs');
+          const git = args => cp.execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const existe = ref => cp.spawnSync('git', ['cat-file', '-e', ref + '^{commit}']).status === 0;
+          const head = process.env.GITHUB_SHA;
+          const anterior = process.env.GITHUB_BEFORE;
+          const base = anterior && !/^0+$/.test(anterior) && existe(anterior)
+            ? anterior
+            : existe(head + '~1') ? head + '~1' : head;
+          const caminhos = JSON.parse(process.env.DEPLOYABLE_PATHS);
+          const alterados = git(['diff', '--name-only', base, head, '--', ...caminhos]);
+          const necessario = alterados.length > 0;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'deploy_required=' + necessario + '\n');
+          console.log('Deploy necessário neste push: ' + necessario);
+          DETECTAR_DEPLOY
+
+  deploy-development:
+    name: "☁️ 02 · Deploy em development"
+    needs: detect-deploy-scope
+    if: needs.detect-deploy-scope.outputs.deploy_required == 'true' && vars.AWS_DEPLOY_ENABLED == 'true'
+    uses: ./.github/workflows/aws-deploy.yml
+    with:
+      environment_name: development
+      terraform_environment_directory: dev
+      ssm_environment_name: development
+    secrets: inherit

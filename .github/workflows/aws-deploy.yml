@@ -1,0 +1,424 @@
+name: "☁️ AWS Deploy"
+run-name: "☁️ Executar infraestrutura de mensageria em ${{ inputs.environment_name }}"
+
+on:
+  workflow_call:
+    inputs:
+      environment_name:
+        description: "GitHub Environment da operação."
+        required: true
+        type: string
+      terraform_environment_directory:
+        description: "Diretório Terraform do ambiente."
+        required: true
+        type: string
+      ssm_environment_name:
+        description: "Nome do ambiente nos contratos SSM."
+        required: true
+        type: string
+    outputs:
+      terraform_action:
+        description: "Ação Terraform resolvida nesta infraestrutura."
+        value: ${{ jobs.resolve_action.outputs.terraform_action }}
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: orcamento-pagamento-aws-development
+  cancel-in-progress: false
+
+env:
+  TF_WORKING_DIRECTORY: infra/terraform/environments/${{ inputs.terraform_environment_directory }}
+  TERRAFORM_VERSION: "1.15.8"
+  SSM_ENVIRONMENT_NAME: ${{ inputs.ssm_environment_name }}
+
+jobs:
+  resolve_action:
+    name: "🔎 01 · Resolver ação do Terraform"
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment_name }}
+    outputs:
+      terraform_action: ${{ steps.resolve.outputs.terraform_action }}
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: "🛡️ Conferir habilitação do deploy AWS"
+        env:
+          DEPLOY_ENABLED: ${{ vars.AWS_DEPLOY_ENABLED }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment_name }}
+          TF_ENVIRONMENT: ${{ inputs.terraform_environment_directory }}
+        run: |
+          test "$DEPLOY_ENABLED" = true
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$DEPLOY_ENVIRONMENT" = development
+          test "$TF_ENVIRONMENT" = dev
+          test "$SSM_ENVIRONMENT_NAME" = development
+
+      - name: "🚦 02 · Ler ação e exigir destroy dedicado"
+        id: resolve
+        env:
+          GITHUB_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          control_file="$TF_WORKING_DIRECTORY/terraform-action.env"
+          terraform_action="$(grep -E '^TERRAFORM_ACTION=' "$control_file" | tail -n 1 | cut -d '=' -f 2- | tr -d '\r')"
+          case "$terraform_action" in
+            apply|destroy) ;;
+            *) echo '::error::Ação Terraform inválida.'; exit 1 ;;
+          esac
+          if [ "$terraform_action" = destroy ]; then
+            test -n "$GITHUB_BEFORE"
+            git cat-file -e "$GITHUB_BEFORE^{commit}"
+            git diff --name-only "$GITHUB_BEFORE" "$GITHUB_SHA" -- "$control_file" | grep -qx "$control_file"
+            echo '::warning::Destroy dedicado; mensagens pendentes e produtor ativo bloqueiam a operação.'
+          fi
+          echo "terraform_action=$terraform_action" >> "$GITHUB_OUTPUT"
+
+  prepare_and_plan:
+    name: "📋 02 · Preparar variáveis e gerar plano"
+    needs: resolve_action
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment_name }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      TERRAFORM_ACTION: ${{ needs.resolve_action.outputs.terraform_action }}
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛡️ Preparar validações definidas no workflow"
+        id: preparar_validacoes
+        run: &validacoes_mensageria |
+          cat > "$RUNNER_TEMP/mensageria-orcamento.cjs" <<'VALIDAR_MENSAGERIA'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const cp = require('node:child_process');
+          const chaves = ['entrada_queue_url', 'entrada_queue_arn', 'dlq_url', 'dlq_arn'];
+          const contagens = ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'ApproximateNumberOfMessagesDelayed'];
+
+          function nomes(ambiente) {
+            if (ambiente !== 'development') throw new Error('Operação física permitida somente em development.');
+            const base = '/oficina-mecanica/' + ambiente;
+            return { prefixo: base + '/orcamento-pagamento', status: base + '/status/orcamento-pagamento', produtor: base + '/status/api', fila: 'oficina-mecanica-orcamento-pagamento-' + ambiente };
+          }
+          function validarState(state, conta, regiao, ambiente) {
+            if (!state || !Array.isArray(state.resources)) throw new Error('State inválido; não substituir por state vazio.');
+            const n = nomes(ambiente);
+            for (const r of state.resources) {
+              if (r.mode !== 'managed') throw new Error('State contém data source ou modo não autorizado.');
+              const recursos = { aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'], aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'], aws_ssm_parameter: ['orcamento_pagamento_mensageria', 'orcamento_pagamento_mensageria_status'] };
+              if (!recursos[r.type]?.includes(r.name)) throw new Error('Recurso desconhecido no state.');
+              if (r.module || !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)) throw new Error('State contém recurso fora do ownership da mensageria.');
+              for (const i of r.instances || []) {
+                const a = i.attributes || {};
+                if (r.type === 'aws_ssm_parameter') {
+                  if (![n.status, ...chaves.map(k => n.prefixo + '/' + k)].includes(a.name) || a.arn !== 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + a.name) throw new Error('Parâmetro do state pertence a outro owner, conta ou região.');
+                } else {
+                  const url = a.queue_url || a.url || a.id;
+                  const permitidas = [n.fila + '.fifo', n.fila + '-dlq.fifo'];
+                  if (!permitidas.some(nome => url === 'https://sqs.' + regiao + '.amazonaws.com/' + conta + '/' + nome)) throw new Error('Fila do state pertence a outro owner, conta ou região.');
+                  if (r.type === 'aws_sqs_queue' && a.arn !== 'arn:aws:sqs:' + regiao + ':' + conta + ':' + url.split('/').pop()) throw new Error('ARN da fila diverge do state.');
+                }
+              }
+            }
+          }
+          function contratos(state) {
+            const fila = nome => (state.resources || []).find(r => r.mode === 'managed' && r.type === 'aws_sqs_queue' && r.name === nome)?.instances?.[0]?.attributes || {};
+            const entrada = fila('orcamento_pagamento_entrada'), dlq = fila('orcamento_pagamento_dlq');
+            return { entrada_queue_url: entrada.url || entrada.id || '', entrada_queue_arn: entrada.arn || '', dlq_url: dlq.url || dlq.id || '', dlq_arn: dlq.arn || '' };
+          }
+          function ausente(args, erro) {
+            const codigos = { sqs: ['(AWS.SimpleQueueService.NonExistentQueue)', '(QueueDoesNotExist)'], ssm: ['(ParameterNotFound)'] };
+            return codigos[args[0]]?.some(codigo => String(erro.stderr).includes(codigo)) || false;
+          }
+          function consultar(...args) {
+            try {
+              const resposta = JSON.parse(cp.execFileSync('aws', [...args, '--region', process.env.AWS_REGION, '--output', 'json'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+              if (!resposta || typeof resposta !== 'object' || Array.isArray(resposta)) throw new Error('Resposta inválida.');
+              return resposta;
+            } catch (erro) {
+              if (ausente(args, erro)) return null;
+              throw new Error('Consulta AWS falhou sem comprovar ausência; operação bloqueada.');
+            }
+          }
+          function verificarVazio(ambiente, aws) {
+            const n = nomes(ambiente);
+            for (const nome of [n.fila + '.fifo', n.fila + '-dlq.fifo']) if (aws('sqs', 'get-queue-url', '--queue-name', nome) !== null) throw new Error('Fila existente sem state recuperado; bootstrap bloqueado.');
+            const parametros = aws('ssm', 'describe-parameters', '--parameter-filters', 'Key=Name,Option=BeginsWith,Values=' + n.prefixo + '/');
+            if (!Array.isArray(parametros?.Parameters) || parametros.Parameters.length) throw new Error('Contrato existente ou inventário inválido; bootstrap bloqueado.');
+            if (aws('ssm', 'get-parameter', '--name', n.status) !== null) throw new Error('Status existente sem state; bootstrap bloqueado.');
+          }
+          function pendencias(c, ambiente, aws) {
+            if (!Object.values(c).some(Boolean)) return;
+            if (Object.values(c).some(v => !v)) throw new Error('State incompleto; não presumir filas ausentes.');
+            if (aws('ssm', 'get-parameter', '--name', nomes(ambiente).produtor) !== null) throw new Error('Produtor OS ainda possui infraestrutura ativa; remover o produtor antes da mensageria de cobrança.');
+            for (const url of [c.entrada_queue_url, c.dlq_url]) {
+              const resposta = aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', ...contagens);
+              if (resposta === null) continue;
+              for (const campo of contagens) if (typeof resposta.Attributes?.[campo] !== 'string' || !/^\d+$/.test(resposta.Attributes[campo]) || Number(resposta.Attributes[campo]) !== 0) throw new Error('Mensagens pendentes ou contagem inválida; destroy bloqueado.');
+            }
+          }
+          function verificarInfra(c, ambiente, aws) {
+            if (Object.values(c).some(v => !v)) throw new Error('Contratos incompletos após apply.');
+            for (const [url, arn, dlq] of [[c.entrada_queue_url, c.entrada_queue_arn, false], [c.dlq_url, c.dlq_arn, true]]) {
+              const a = aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', 'All')?.Attributes;
+              if (!a || a.QueueArn !== arn || a.FifoQueue !== 'true' || a.ContentBasedDeduplication !== 'false' || a.SqsManagedSseEnabled !== 'true' || a.MessageRetentionPeriod !== (dlq ? '1209600' : '345600')) throw new Error('Fila real diverge do contrato de FIFO, criptografia ou retenção.');
+              if (!dlq) {
+                const redrive = JSON.parse(a.RedrivePolicy || '{}');
+                if (a.VisibilityTimeout !== '60' || a.ReceiveMessageWaitTimeSeconds !== '20' || redrive.deadLetterTargetArn !== c.dlq_arn || Number(redrive.maxReceiveCount) !== 5) throw new Error('Recuperação da entrada diverge da RFC.');
+              } else {
+                const allow = JSON.parse(a.RedriveAllowPolicy || '{}');
+                if (allow.redrivePermission !== 'byQueue' || allow.sourceQueueArns?.length !== 1 || allow.sourceQueueArns[0] !== c.entrada_queue_arn) throw new Error('DLQ aceita redrive de outra origem.');
+              }
+            }
+            const n = nomes(ambiente);
+            for (const k of chaves) {
+              const p = aws('ssm', 'get-parameter', '--name', n.prefixo + '/' + k)?.Parameter;
+              if (p?.Value !== c[k] || p.Type !== 'String') throw new Error('Contrato SSM diverge do state.');
+            }
+            const status = aws('ssm', 'get-parameter', '--name', n.status)?.Parameter;
+            if (status?.Value !== 'ready' || status.Type !== 'String') throw new Error('Status da infraestrutura divergente.');
+          }
+          function verificarRemocao(c, ambiente, aws) {
+            for (const url of [c.entrada_queue_url, c.dlq_url].filter(Boolean)) if (aws('sqs', 'get-queue-attributes', '--queue-url', url, '--attribute-names', 'QueueArn') !== null) throw new Error('Fila ainda existe após destroy.');
+            const n = nomes(ambiente);
+            for (const nome of [n.status, ...chaves.map(k => n.prefixo + '/' + k)]) if (aws('ssm', 'get-parameter', '--name', nome) !== null) throw new Error('Parâmetro ainda existe após destroy.');
+          }
+          function validarPlano(plano, acao, ambiente = "development") {
+            const n = nomes(ambiente);
+            if (!['apply', 'destroy'].includes(acao) || typeof plano.format_version !== 'string' || !plano.planned_values || (plano.resource_changes !== undefined && !Array.isArray(plano.resource_changes))) throw new Error('Plano ou ação inválidos.');
+            for (const r of plano.resource_changes || []) {
+              if (r.mode === 'data') throw new Error('Mensageria não deve depender de data source de outro owner.');
+              if (r.module_address || !['aws_sqs_queue', 'aws_sqs_queue_redrive_allow_policy', 'aws_ssm_parameter'].includes(r.type)) throw new Error('Plano contém infraestrutura fora do owner.');
+              const nomesRecursos = { aws_sqs_queue: ['orcamento_pagamento_entrada', 'orcamento_pagamento_dlq'], aws_sqs_queue_redrive_allow_policy: ['orcamento_pagamento_dlq'], aws_ssm_parameter: ['orcamento_pagamento_mensageria', 'orcamento_pagamento_mensageria_status'] };
+              if (!nomesRecursos[r.type]?.includes(r.name)) throw new Error('Plano contém recurso desconhecido.');
+              const atributos = r.change?.after || r.change?.before || {};
+              if (r.type === 'aws_sqs_queue' && ![n.fila + '.fifo', n.fila + '-dlq.fifo'].includes(atributos.name)) throw new Error('Plano contém fila de outro owner.');
+              if (r.type === 'aws_ssm_parameter' && ![n.status, ...chaves.map(k => n.prefixo + '/' + k)].includes(atributos.name)) throw new Error('Plano contém parâmetro de outro owner.');
+              const acoes = r.change?.actions;
+              if (!Array.isArray(acoes) || acoes.length === 0 || acoes.some(a => !['no-op', 'delete', 'create', 'update', 'read'].includes(a))) throw new Error('Ações de plano inválidas.');
+              if (acao === 'destroy' && acoes.some(a => !['no-op', 'delete', 'read'].includes(a))) throw new Error('Destroy não pode criar ou atualizar recursos.');
+              if (acao === 'apply' && acoes.includes('delete')) throw new Error('Remoção/substituição exige destroy dedicado e filas drenadas.');
+            }
+          }
+          function validarContextoPlano(atual, esperado) {
+            if (!atual || Object.keys(atual).length !== Object.keys(esperado).length || Object.entries(esperado).some(([k, v]) => atual[k] !== v)) throw new Error('Plano pertence a outra conta, região, ambiente, ação ou commit.');
+          }
+          function main() {
+            const dir = process.env.TF_WORKING_DIRECTORY, ambiente = process.env.SSM_ENVIRONMENT_NAME;
+            nomes(ambiente);
+            const stateFile = path.join(dir, 'terraform.tfstate');
+            const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : { resources: [] };
+            const conta = consultar('sts', 'get-caller-identity')?.Account;
+            if (!/^\d{12}$/.test(conta || '')) throw new Error('Identidade AWS inválida.');
+            validarState(state, conta, process.env.AWS_REGION, ambiente);
+            const c = contratos(state), modo = process.argv[2];
+            if (modo === 'state') {
+              if (!fs.existsSync(stateFile)) {
+                if (process.env.TERRAFORM_ACTION !== 'destroy') throw new Error('Cache ausente; exige bootstrap por destroy dedicado e inventário vazio do próprio owner.');
+                verificarVazio(ambiente, consultar);
+              } else if (!state.resources.some(r => r.mode === 'managed' && r.instances?.length)) {
+                verificarVazio(ambiente, consultar);
+              }
+            } else if (modo === 'before-destroy') {
+              pendencias(c, ambiente, consultar);
+              fs.writeFileSync(path.join(dir, 'mensageria-destroy-context.json'), JSON.stringify(c));
+            } else if (modo === 'after-apply') verificarInfra(c, ambiente, consultar);
+            else if (modo === 'after-destroy') {
+              if (state.resources.some(r => r.mode === 'managed' && r.instances?.length)) throw new Error('State ainda contém recursos gerenciados.');
+              verificarRemocao(JSON.parse(fs.readFileSync(path.join(dir, 'mensageria-destroy-context.json'), 'utf8')), ambiente, consultar);
+            } else if (modo === 'plan') {
+              const plano = JSON.parse(cp.execFileSync('terraform', ['-chdir=' + dir, 'show', '-json', 'tfplan'], { encoding: 'utf8' }));
+              validarPlano(plano, process.env.TERRAFORM_ACTION, ambiente);
+              const contextoPlano = { conta, regiao: process.env.AWS_REGION, ambiente, acao: process.env.TERRAFORM_ACTION, commit: process.env.GITHUB_SHA };
+              const arquivoPlano = path.join(dir, 'plan-context.json');
+              if (process.argv[3] === 'verify-context') validarContextoPlano(JSON.parse(fs.readFileSync(arquivoPlano, 'utf8')), contextoPlano);
+              else fs.writeFileSync(arquivoPlano, JSON.stringify(contextoPlano));
+            } else throw new Error('Verificação não reconhecida.');
+            console.log('Validação de mensageria concluída: ' + modo + '. Não comprova aplicação implantada.');
+          }
+          module.exports = { nomes, validarState, contratos, ausente, verificarVazio, pendencias, verificarInfra, verificarRemocao, validarPlano, validarContextoPlano };
+          if (require.main === module) { try { main(); } catch (erro) { console.error(erro.message); process.exit(1); } }
+
+          VALIDAR_MENSAGERIA
+
+      - name: "🛡️ Conferir habilitação do deploy AWS"
+        env:
+          DEPLOY_ENABLED: ${{ vars.AWS_DEPLOY_ENABLED }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment_name }}
+          TF_ENVIRONMENT: ${{ inputs.terraform_environment_directory }}
+        run: |
+          test "$DEPLOY_ENABLED" = true
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$DEPLOY_ENVIRONMENT" = development
+          test "$TF_ENVIRONMENT" = dev
+          test "$SSM_ENVIRONMENT_NAME" = development
+
+      - name: "🔑 02 · Configurar credenciais AWS"
+        id: aws_credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "🛠️ 03 · Instalar Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: "📦 04 · Restaurar state da conta e ambiente"
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
+          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-plan
+          restore-keys: |
+            tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+
+      - name: "🛡️ 05 · Validar ownership e bootstrap do state"
+        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+
+      - name: "🚀 06 · Inicializar e validar Terraform"
+        run: |
+          terraform -chdir="$TF_WORKING_DIRECTORY" init -input=false
+          terraform -chdir="$TF_WORKING_DIRECTORY" validate
+
+      - name: "🛡️ 07 · Conferir produtor e filas antes do destroy"
+        if: env.TERRAFORM_ACTION == 'destroy'
+        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" before-destroy
+
+      - name: "📐 08 · Gerar plano salvo"
+        env:
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_ssm_environment_name: ${{ env.SSM_ENVIRONMENT_NAME }}
+        run: |
+          set -euo pipefail
+          if [ "$TERRAFORM_ACTION" = destroy ]; then
+            terraform -chdir="$TF_WORKING_DIRECTORY" plan -destroy -input=false -out=tfplan
+          else
+            terraform -chdir="$TF_WORKING_DIRECTORY" plan -input=false -out=tfplan
+          fi
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" plan
+          cd "$TF_WORKING_DIRECTORY"
+          sha256sum tfplan > tfplan.sha256
+          printf '%s' "$GITHUB_SHA" > source-commit.txt
+
+      - name: "⬆️ 09 · Publicar plano desta tentativa"
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.TF_WORKING_DIRECTORY }}/tfplan
+            ${{ env.TF_WORKING_DIRECTORY }}/tfplan.sha256
+            ${{ env.TF_WORKING_DIRECTORY }}/source-commit.txt
+            ${{ env.TF_WORKING_DIRECTORY }}/plan-context.json
+            ${{ env.TF_WORKING_DIRECTORY }}/mensageria-destroy-context.json
+          if-no-files-found: error
+          retention-days: 3
+
+  terraform_apply:
+    name: "☁️ 03 · Aplicar ou destruir mensageria"
+    needs: [resolve_action, prepare_and_plan]
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment_name }}
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      TERRAFORM_ACTION: ${{ needs.resolve_action.outputs.terraform_action }}
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛡️ Preparar validações definidas no workflow"
+        run: *validacoes_mensageria
+
+      - name: "🛡️ Conferir habilitação do deploy AWS"
+        env:
+          DEPLOY_ENABLED: ${{ vars.AWS_DEPLOY_ENABLED }}
+          DEPLOY_ENVIRONMENT: ${{ inputs.environment_name }}
+          TF_ENVIRONMENT: ${{ inputs.terraform_environment_directory }}
+        run: |
+          test "$DEPLOY_ENABLED" = true
+          test "$GITHUB_REF" = refs/heads/develop
+          test "$DEPLOY_ENVIRONMENT" = development
+          test "$TF_ENVIRONMENT" = dev
+          test "$SSM_ENVIRONMENT_NAME" = development
+
+      - name: "🔑 02 · Configurar credenciais AWS"
+        id: aws_credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: "🛠️ 03 · Instalar Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: "📦 04 · Restaurar state da conta e ambiente"
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
+          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
+          restore-keys: |
+            tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-
+
+      - name: "🛡️ 05 · Validar ownership e bootstrap do state"
+        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" state
+
+      - name: "🚀 06 · Inicializar Terraform"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" init -input=false
+
+      - name: "⬇️ 07 · Baixar plano desta tentativa"
+        uses: actions/download-artifact@v8
+        with:
+          name: tfplan-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.TF_WORKING_DIRECTORY }}
+
+      - name: "🛡️ 08 · Conferir plano, commit e pendências atuais"
+        run: |
+          set -euo pipefail
+          test "$(cat "$TF_WORKING_DIRECTORY/source-commit.txt")" = "$GITHUB_SHA"
+          (cd "$TF_WORKING_DIRECTORY" && sha256sum -c tfplan.sha256)
+          node "$RUNNER_TEMP/mensageria-orcamento.cjs" plan verify-context
+          if [ "$TERRAFORM_ACTION" = destroy ]; then
+            node "$RUNNER_TEMP/mensageria-orcamento.cjs" before-destroy
+          fi
+
+      - name: "✅ 09 · Aplicar exclusivamente o plano salvo"
+        id: apply
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" apply -input=false -auto-approve tfplan
+
+      - name: "💾 10 · Preservar state final, inclusive após falha parcial"
+        if: always() && steps.apply.outcome != 'skipped' && steps.apply.outcome != ''
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate
+            ${{ env.TF_WORKING_DIRECTORY }}/terraform.tfstate.backup
+          key: tfstate-${{ steps.aws_credentials.outputs.aws-account-id }}-${{ inputs.environment_name }}-orcamento-pagamento-${{ github.run_id }}-${{ github.run_attempt }}-final
+
+      - name: "🔎 11 · Validar recursos reais e contratos após apply"
+        if: env.TERRAFORM_ACTION == 'apply'
+        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" after-apply
+
+      - name: "🔎 11 · Validar state vazio e ausência real após destroy"
+        if: env.TERRAFORM_ACTION == 'destroy'
+        run: node "$RUNNER_TEMP/mensageria-orcamento.cjs" after-destroy
