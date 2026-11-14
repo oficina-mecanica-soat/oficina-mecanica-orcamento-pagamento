@@ -37,6 +37,7 @@ public sealed class OrcamentoPagamentoApiFixture : IAsyncLifetime
         {
             ["ConnectionStrings__DefaultConnection"] = ConnectionString,
             ["Database__ApplyMigrationsOnStartup"] = "false",
+            ["ProcessamentoRemoto__Habilitado"] = "false",
             ["Jwt__Issuer"] = "oficina-mecanica-auth",
             ["Jwt__Audience"] = "oficina-mecanica-api",
             ["Jwt__Secret"] = ChaveTeste
