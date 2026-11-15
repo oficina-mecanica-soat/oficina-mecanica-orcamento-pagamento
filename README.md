@@ -4,6 +4,8 @@ Serviço responsável por orçamentos versionados e pagamentos da Oficina Mecân
 
 ## Arquitetura e referências
 
+O [contrato OpenAPI versionado](docs/openapi/oficina-mecanica-orcamento-pagamento-openapi.json) é exportado do Swagger da aplicação. Para exercitar o fluxo público coordenado, consulte a [collection e o roteiro integrados da API](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/evidencias/postman.md). Geração/cancelamento direto de orçamento são rotas legadas, bloqueadas quando o modo distribuído está habilitado; nesse modo, a Saga envia os comandos por SQS.
+
 As decisões continuam centralizadas na [API principal](https://github.com/oficina-mecanica-soat/oficina-mecanica-api): ADR-0024, ADR-0025, ADR-0026, RFC-0007 e `docs/projeto/backlog-tecnico.md` (F4-07/F4-08). Consulte também o [AGENTS.md](AGENTS.md).
 
 O serviço preserva a organização da API principal: `Domain`, `Application`, `Infrastructure` e `API`; funcionalidades agrupadas por contexto; Request/Response/Validator/UseCase; `Result<T>` e erros tipados; AutoMapper; FluentValidation; DI explícita; autenticação JWT; tratamento centralizado de exceções e logs estruturados. As configurações de JWT, Swagger, correlação, respostas HTTP e observabilidade foram adaptadas das implementações existentes. Os testes seguem Factories, AAA, xUnit e FluentAssertions.
