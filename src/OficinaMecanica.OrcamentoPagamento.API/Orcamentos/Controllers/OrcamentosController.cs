@@ -53,7 +53,7 @@ public sealed class OrcamentosController : ControllerBase
         }
         var resultado = await useCase.ExecuteAsync(
             new(orcamentoId, body.Versao, body.Decisao, body.OperacaoId, clienteId), cancellationToken);
-        return resultado.Sucesso ? AcceptedAtAction(nameof(Detalhar), new { orcamentoId }, resultado.Valor) : this.ToActionResult(resultado);
+        return resultado.Sucesso ? Accepted(Url.Action(nameof(Detalhar), new { orcamentoId }), resultado.Valor) : this.ToActionResult(resultado);
     }
 
     [ExigirFluxoLegado]
@@ -63,7 +63,7 @@ public sealed class OrcamentosController : ControllerBase
     public async Task<IActionResult> Cancelar([FromServices] CancelarOrcamentoUseCase useCase, Guid orcamentoId, [FromBody] CancelarOrcamentoBody body, CancellationToken cancellationToken)
     {
         var resultado = await useCase.ExecuteAsync(new(orcamentoId, body.Versao, body.OperacaoId, body.Motivo), cancellationToken);
-        return resultado.Sucesso ? AcceptedAtAction(nameof(Detalhar), new { orcamentoId }, resultado.Valor) : this.ToActionResult(resultado);
+        return resultado.Sucesso ? Accepted(Url.Action(nameof(Detalhar), new { orcamentoId }), resultado.Valor) : this.ToActionResult(resultado);
     }
 
     private Guid? ObterClienteAutenticado()
