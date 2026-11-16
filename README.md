@@ -163,6 +163,8 @@ Os testes do provedor substituto comprovam o comportamento local; não comprovam
 
 ### Rastreamento das mensagens
 
+A emissão HTTP usa o middleware oficial do Serilog configurado como na API principal, com rota parametrizada, correlação e níveis consistentes. Healthcheck saudável não gera ruído no nível normal; avisos e erros permanecem visíveis. A origem do logger é SourceContext; mensagens das bibliotecas são preservadas, e SQL rotineiro fica fora do nível normal. Consulte a [convenção da RFC-0006](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/architecture/rfcs/rfc-0006-observabilidade-centralizada-com-datadog.md).
+
 A Infrastructure usa o SDK nativo Datadog 3.50.0, na mesma versão do profiler adotado na API principal. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
 
 A criação/exportação dos spans exige profiler e Agent compatíveis no workload. Os testes locais sem profiler verificam logs, restauração de escopos, filtragem e preservação do carrier; não comprovam ingestão Datadog ou rastreamento distribuído implantado. Não há OpenTelemetry ou novo Agent.
