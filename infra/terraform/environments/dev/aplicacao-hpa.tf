@@ -8,7 +8,8 @@ resource "kubernetes_horizontal_pod_autoscaler_v2" "orcamento_pagamento" {
 
   spec {
     min_replicas = 1
-    max_replicas = 5
+    # Limite de réplicas compatível com os dois nodes do laboratório.
+    max_replicas = 2
 
     scale_target_ref {
       api_version = "apps/v1"
