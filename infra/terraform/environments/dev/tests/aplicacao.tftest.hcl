@@ -27,6 +27,13 @@ run "workload_preserva_secret_probes_datadog_e_porta_exclusiva" {
   command = plan
   assert {
     condition = (
+      kubernetes_config_map_v1.orcamento_pagamento[0].data["MercadoPago__Ativo"] == "false" &&
+      try(tonumber(kubernetes_config_map_v1.orcamento_pagamento[0].data["MercadoPago__RecebedorId"]), -1) == 0
+    )
+    error_message = "Pagamento desativado deve enviar um identificador numérico válido ao binder .NET, sem exigir credenciais."
+  }
+  assert {
+    condition = (
       kubernetes_deployment_v1.orcamento_pagamento[0].spec[0].template[0].spec[0].container[0].image == var.aplicacao_image_uri &&
       kubernetes_service_v1.orcamento_pagamento[0].spec[0].type == "NodePort" &&
       kubernetes_service_v1.orcamento_pagamento[0].spec[0].port[0].node_port == 30082 &&

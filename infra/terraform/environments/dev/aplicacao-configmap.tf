@@ -17,7 +17,7 @@ resource "kubernetes_config_map_v1" "orcamento_pagamento" {
     ProcessamentoRemoto__FilaEntradaUrl       = aws_sqs_queue.orcamento_pagamento_entrada.url
     ProcessamentoRemoto__FilaResultadosOsUrl  = var.os_entrada_queue_url
     MercadoPago__Ativo                        = tostring(var.mercado_pago_ativo)
-    MercadoPago__RecebedorId                  = var.mercado_pago_recebedor_id
+    MercadoPago__RecebedorId                  = var.mercado_pago_ativo ? var.mercado_pago_recebedor_id : "0"
     MercadoPago__UrlNotificacao               = var.mercado_pago_url_notificacao
     DD_ENV                                    = var.ssm_environment_name
     DD_SERVICE                                = "oficina-mecanica-orcamento-pagamento"
