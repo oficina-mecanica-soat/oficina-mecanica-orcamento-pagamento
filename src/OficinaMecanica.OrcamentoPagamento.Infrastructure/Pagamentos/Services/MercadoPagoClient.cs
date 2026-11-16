@@ -110,12 +110,25 @@ public sealed class MercadoPagoClient : IProvedorPagamento
 
         using var requisicao = new HttpRequestMessage(HttpMethod.Get, $"v1/payments/{id.ToString(CultureInfo.InvariantCulture)}");
         var resposta = await EnviarAsync<MercadoPagoPagamentoResponse>(requisicao, cancellationToken);
-        if (resposta.Id != id || resposta.CollectorId != _options.RecebedorId || resposta.LiveMode != false
+        if (resposta.Id != id || resposta.CollectorId != _options.RecebedorId || resposta.LiveMode is null
             || !Guid.TryParseExact(resposta.ExternalReference, "D", out var referencia) || referencia == Guid.Empty
             || resposta.TransactionAmount is null || !ValorValido(resposta.TransactionAmount.Value)
             || resposta.CurrencyId != "BRL" || string.IsNullOrWhiteSpace(resposta.Status))
         {
             throw new ProvedorPagamentoException(TipoFalhaProvedorPagamento.RespostaInvalida);
+        }
+
+        if (resposta.LiveMode.Value)
+        {
+            // Contas vendedoras de teste podem retornar live_mode=true para saldo fictício.
+            // A exceção exige prova autenticada no provedor, nunca um toggle local.
+            using var consultaUsuario = new HttpRequestMessage(HttpMethod.Get, "users/me");
+            var usuario = await EnviarAsync<MercadoPagoUsuarioResponse>(consultaUsuario, cancellationToken);
+            if (usuario.Id != _options.RecebedorId || usuario.Tags is null
+                || !usuario.Tags.Contains("test_user", StringComparer.Ordinal))
+            {
+                throw new ProvedorPagamentoException(TipoFalhaProvedorPagamento.RespostaInvalida);
+            }
         }
 
         var status = resposta.Status switch

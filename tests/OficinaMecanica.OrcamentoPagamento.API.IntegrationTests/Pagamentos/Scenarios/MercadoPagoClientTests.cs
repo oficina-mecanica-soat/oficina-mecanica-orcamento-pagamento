@@ -12,6 +12,62 @@ namespace OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Pagamentos.Sce
 
 public sealed class MercadoPagoClientTests
 {
+    [Theory]
+    [InlineData(401, TipoFalhaProvedorPagamento.RequisicaoRecusada)]
+    [InlineData(500, TipoFalhaProvedorPagamento.Indisponivel)]
+    public async Task Dado_IdentidadeDoVendedorIndisponivel_Quando_ConferirContaDeTeste_Entao_NaoDeveConfirmar(int status, TipoFalhaProvedorPagamento esperado)
+    {
+        // Arrange
+        var dados = new MercadoPagoTestDataFactory();
+        using var handler = new RespostaProvedorHandler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath == "/users/me"
+                ? RespostaProvedorHandler.Json("credencial-proibida-na-resposta", (HttpStatusCode)status)
+                : RespostaProvedorHandler.Json(dados.Pagamento(p => p["live_mode"] = true))));
+
+        // Act
+        var consultar = () => dados.CriarCliente(handler).ConsultarPagamentoAsync("123456");
+
+        // Assert
+        var falha = (await consultar.Should().ThrowAsync<ProvedorPagamentoException>()).Which;
+        falha.Tipo.Should().Be(esperado);
+        falha.ToString().Should().NotContain("credencial-proibida-na-resposta");
+        handler.QuantidadeRequisicoes.Should().Be(2);
+    }
+
+    [Theory]
+    [InlineData("{\"id\":42,\"tags\":[\"test_user\"]}", true)]
+    [InlineData("{\"id\":42,\"tags\":[\"normal\",\"test_user\"]}", true)]
+    [InlineData("{\"id\":42,\"tags\":[\"normal\"]}", false)]
+    [InlineData("{\"id\":42,\"tags\":[\"TEST_USER\"]}", false)]
+    [InlineData("{\"id\":42,\"tags\":null}", false)]
+    [InlineData("{\"id\":99,\"tags\":[\"test_user\"]}", false)]
+    [InlineData("{}", false)]
+    public async Task Dado_PagamentoEmContaDeTeste_Quando_ProvedorRetornarLiveMode_Entao_ExigirIdentidadeAutenticadaDoVendedor(string usuario, bool permitido)
+    {
+        // Arrange
+        var dados = new MercadoPagoTestDataFactory();
+        using var handler = new RespostaProvedorHandler((request, _) =>
+        {
+            request.Headers.Authorization!.Parameter.Should().Be(dados.Configuracao.AccessToken);
+            var corpo = request.RequestUri!.AbsolutePath == "/users/me"
+                ? usuario : dados.Pagamento(p => p["live_mode"] = true);
+            return Task.FromResult(RespostaProvedorHandler.Json(corpo));
+        });
+        var consultar = () => dados.CriarCliente(handler).ConsultarPagamentoAsync("123456");
+
+        // Act / Assert
+        if (permitido)
+        {
+            (await consultar()).Status.Should().Be(StatusPagamentoProvedor.Confirmado);
+        }
+        else
+        {
+            (await consultar.Should().ThrowAsync<ProvedorPagamentoException>()).Which.Tipo
+                .Should().Be(TipoFalhaProvedorPagamento.RespostaInvalida);
+        }
+        handler.QuantidadeRequisicoes.Should().Be(2);
+    }
+
     [Fact]
     public async Task Dado_CheckoutValido_Quando_Criar_Entao_DeveAdaptarContratoSemDadosDeCartaoOuTokenNoCorpo()
     {
