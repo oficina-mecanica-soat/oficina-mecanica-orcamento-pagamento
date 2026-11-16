@@ -154,6 +154,8 @@ public sealed class OrcamentosControllerTests : IAsyncLifetime
 
         // Assert
         cancelar.StatusCode.Should().Be(HttpStatusCode.Accepted);
+        cancelar.Headers.Location.Should().NotBeNull();
+        cancelar.Headers.Location!.IsAbsoluteUri.Should().BeFalse();
         repetir.StatusCode.Should().Be(HttpStatusCode.Accepted);
         var resultado = (await cancelar.Content.ReadFromJsonAsync<OrcamentoResponse>())!;
         resultado.Status.Should().Be("Cancelado");
