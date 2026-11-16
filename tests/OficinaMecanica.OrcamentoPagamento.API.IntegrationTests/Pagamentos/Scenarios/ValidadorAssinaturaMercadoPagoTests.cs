@@ -1,5 +1,7 @@
 using FluentAssertions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using Moq;
 using OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Pagamentos.Factories;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos.Options;
 using OficinaMecanica.OrcamentoPagamento.Infrastructure.Pagamentos.Services;
@@ -10,6 +12,28 @@ public sealed class ValidadorAssinaturaMercadoPagoTests
 {
     private const string HashEsperado = "9af8f9b136f35b35c2938a77fd515b29732c3297d48a8b90136aa57f4cbc2036";
     private const string AssinaturaValida = "ts=1742505638683,v1=" + HashEsperado;
+
+    [Theory]
+    [InlineData("conteudo-proibido", "campo_malformado")]
+    [InlineData("ts=1742505638684,v1=" + HashEsperado, "hash_divergente")]
+    public void Dado_AssinaturaRecusada_Quando_RegistrarDiagnostico_Entao_NaoDeveExporCredenciaisOuEntrada(string assinatura, string motivo)
+    {
+        // Arrange
+        var dados = new MercadoPagoTestDataFactory();
+        var logger = new Mock<ILogger<ValidadorAssinaturaMercadoPago>>();
+        var validador = new ValidadorAssinaturaMercadoPago(Options.Create(dados.Configuracao), logger.Object);
+
+        // Act
+        var valida = validador.Validar(assinatura, "requisicao-teste-123", "123456");
+
+        // Assert
+        valida.Should().BeFalse();
+        var registro = logger.Invocations.Single(invocacao => invocacao.Method.Name == nameof(ILogger.Log));
+        var texto = registro.Arguments[2].ToString();
+        texto.Should().Contain(motivo).And.NotContain(assinatura)
+            .And.NotContain(dados.Configuracao.WebhookSecret).And.NotContain(dados.Configuracao.AccessToken)
+            .And.NotContain("requisicao-teste-123");
+    }
 
     [Theory]
     [InlineData(AssinaturaValida)]
