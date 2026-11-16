@@ -136,6 +136,8 @@ O publicador trabalha em um loop separado, para que a espera do consumidor não 
 
 ## Validar
 
+Na [CI de referência do código entregue](https://github.com/oficina-mecanica-soat/oficina-mecanica-orcamento-pagamento/actions/runs/43806759908), foram aprovados **300 testes**, sem falhas ou ignorados, com **94,03% de cobertura global de linhas**. Os relatórios estão no artefato `test-and-coverage-results`. O gate exige 90%; uma CI somente documental não representa nova medição.
+
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
 
 O CI também valida Terraform e os guardrails executáveis da mensageria. O CD atual implanta exclusivamente a entrada FIFO/DLQ e os contratos SSM; não publica imagem nem implanta a aplicação. Por isso, não abre promoções para release/main. O CD completo do workload depende do banco e da credencial próprios, registry e rede; uma fila criada não comprova serviço implantado.
