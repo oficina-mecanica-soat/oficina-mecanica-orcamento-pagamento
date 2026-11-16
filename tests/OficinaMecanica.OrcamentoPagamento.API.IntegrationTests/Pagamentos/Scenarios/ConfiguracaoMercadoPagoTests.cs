@@ -12,6 +12,30 @@ namespace OficinaMecanica.OrcamentoPagamento.API.IntegrationTests.Pagamentos.Sce
 public sealed class ConfiguracaoMercadoPagoTests
 {
     [Fact]
+    public void Dado_ProvedorDesativadoNoKubernetes_Quando_ValidarInicializacao_Entao_DeveAceitarRecebedorNumericoSemCredenciais()
+    {
+        // Arrange
+        var configuracao = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["MercadoPago:Ativo"] = "false",
+            ["MercadoPago:RecebedorId"] = "0",
+            ["MercadoPago:AccessToken"] = "",
+            ["MercadoPago:WebhookSecret"] = "",
+            ["MercadoPago:UrlNotificacao"] = ""
+        }).Build();
+        using var services = new ServiceCollection().AddPagamentosInfrastructure(configuracao).BuildServiceProvider();
+
+        // Act
+        var validar = () => services.GetRequiredService<IStartupValidator>().Validate();
+
+        // Assert
+        validar.Should().NotThrow();
+        var options = services.GetRequiredService<IOptions<MercadoPagoOptions>>().Value;
+        options.Ativo.Should().BeFalse();
+        options.RecebedorId.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Dado_AmbienteSemCredenciais_Quando_ResolverIntegracao_Entao_DevePermanecerDesabilitadaSemEnviarHttp()
     {
         // Arrange
