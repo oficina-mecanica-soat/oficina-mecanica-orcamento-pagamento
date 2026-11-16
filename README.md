@@ -190,6 +190,8 @@ Os testes operacionais ficam inline no CI e executam os mesmos guardrails do CD 
 
 ## Implantação da aplicação
 
+Na [ordem de apply da solução](https://github.com/oficina-mecanica-soat/oficina-mecanica-api#deploy-aws), este serviço sobe após RDS com banco próprio e API/OS com sua fila publicada. A primeira passagem usa worker e fluxo distribuído ligados, mas `MERCADO_PAGO_ATIVO=false`. Depois de os três serviços estarem saudáveis, o Gateway sobe uma vez com todas as rotas. Sua URL real permite configurar Webhook e assinatura; somente então a mesma esteira atualiza este workload com `MERCADO_PAGO_ATIVO=true`. Não iniciar checkout ou jornadas financeiras antes da configuração completa; health não comprova disponibilidade do provedor.
+
 O CD segue a API principal: resolve a ação, valida dependências, salva o plano, publica a mesma imagem aprovada pela CI, aplica exclusivamente esse plano e confere rollout/health. O build não é refeito durante o deploy: o conteúdo da imagem precisa corresponder à árvore Git integrada. A aplicação usa namespace próprio, Deployment, ConfigMap, Secret, Service NodePort e HPA. Recursos, probes e admissão Datadog seguem a API; não há novo Agent.
 
 O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamento` pertencem ao contrato RDS próprio. O CD exige os status de Kubernetes, RDS e banco isolado em ready, confere o registry da mesma conta/região e busca somente o secret exclusivo. Não utiliza master_secret_arn nem credencial da API. O startup aplica as migrations do serviço, como na API, com a permissão limitada ao banco próprio.
