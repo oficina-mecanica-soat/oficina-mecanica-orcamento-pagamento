@@ -42,7 +42,8 @@ public sealed class PagamentosController : ControllerBase
     [RequestSizeLimit(16384)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> ConferirNotificacao([FromServices] IValidadorNotificacaoPagamento validador,
-        [FromServices] ConferirPagamentoUseCase useCase, [FromBody] JsonElement corpo, CancellationToken cancellationToken)
+        [FromServices] ConferirPagamentoUseCase useCase, [FromServices] ILogger<PagamentosController> logger,
+        [FromBody] JsonElement corpo, CancellationToken cancellationToken)
     {
         var pagamentoId = Request.Query["data.id"];
         var assinatura = Request.Headers["x-signature"];
@@ -50,6 +51,8 @@ public sealed class PagamentosController : ControllerBase
         if (pagamentoId.Count != 1 || assinatura.Count != 1 || requisicaoId.Count != 1
             || !validador.Validar(assinatura[0], requisicaoId[0], pagamentoId[0]))
         {
+            logger.LogWarning("Notificação de pagamento não autenticada. Quantidades de campos: pagamento {QuantidadeIds}, assinatura {QuantidadeAssinaturas}, requisição {QuantidadeRequisicoes}.",
+                pagamentoId.Count, assinatura.Count, requisicaoId.Count);
             return Unauthorized();
         }
         if (corpo.ValueKind != JsonValueKind.Object || !corpo.TryGetProperty("type", out var tipo)
