@@ -1,5 +1,7 @@
 # Orçamento/Pagamento — Oficina Mecânica
 
+A [collection final consolidada](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/postman/oficina-mecanica-completa.postman_collection.json) reúne os três serviços, Auth e demonstração, com ambientes Local e Development. O [guia de uso](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/evidencias/postman.md) explica parâmetros, perfis, IDs e pagamento de teste.
+
 Serviço responsável por orçamentos versionados e pagamentos da Oficina Mecânica. Gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio; cria checkout de teste e confirma pagamentos por consulta autenticada ao provedor.
 
 ## Arquitetura e referências
@@ -136,7 +138,7 @@ O publicador trabalha em um loop separado, para que a espera do consumidor não 
 
 ## Validar
 
-Na [CI de referência do código entregue](https://github.com/oficina-mecanica-soat/oficina-mecanica-orcamento-pagamento/actions/runs/43806759908), foram aprovados **300 testes**, sem falhas ou ignorados, com **94,03% de cobertura global de linhas**. Os relatórios estão no artefato `test-and-coverage-results`. O gate exige 90%; uma CI somente documental não representa nova medição.
+Na [CI de referência do código entregue](https://github.com/oficina-mecanica-soat/oficina-mecanica-orcamento-pagamento/actions/runs/43952148323), foram aprovados **305 testes**, sem falhas ou ignorados, com **94,04% de cobertura global de linhas** (2.100 de 2.233 linhas). Os relatórios estão no artefato `test-and-coverage-results`. O gate exige 90%; uma CI somente documental não representa nova medição.
 
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
 
