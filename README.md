@@ -1,29 +1,10 @@
-# Orçamento/Pagamento — Oficina Mecânica
+# Oficina Mecânica — Orçamento e Pagamento
 
-A [collection final consolidada](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/postman/oficina-mecanica-completa.postman_collection.json) reúne os três serviços, Auth e demonstração, com ambientes Local e Development. O [guia de uso](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/evidencias/postman.md) explica parâmetros, perfis, IDs e pagamento de teste.
+Microsserviço de orçamento, decisão do cliente, cobrança e confirmação financeira. Mantém banco SQL Server, login, migrations, fila e workload próprios. OS coordena a Saga; Execução mantém o trabalho físico.
 
-Serviço responsável por orçamentos versionados e pagamentos da Oficina Mecânica. Gera, consulta, aprova, recusa e cancela orçamentos em SQL Server próprio; cria checkout de teste e confirma pagamentos por consulta autenticada ao provedor.
+## Arquitetura
 
-## Arquitetura e referências
-
-O [contrato OpenAPI versionado](docs/openapi/oficina-mecanica-orcamento-pagamento-openapi.json) é exportado do Swagger da aplicação. Para exercitar o fluxo público coordenado, consulte a [collection e o roteiro integrados da API](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/evidencias/postman.md). Geração/cancelamento direto de orçamento são rotas legadas, bloqueadas quando o modo distribuído está habilitado; nesse modo, a Saga envia os comandos por SQS.
-
-As decisões continuam centralizadas na [API principal](https://github.com/oficina-mecanica-soat/oficina-mecanica-api): ADR-0024, ADR-0025, ADR-0026, RFC-0007 e `docs/projeto/backlog-tecnico.md` (F4-07/F4-08). Consulte também o [AGENTS.md](AGENTS.md).
-
-O serviço preserva a organização da API principal: `Domain`, `Application`, `Infrastructure` e `API`; funcionalidades agrupadas por contexto; Request/Response/Validator/UseCase; `Result<T>` e erros tipados; AutoMapper; FluentValidation; DI explícita; autenticação JWT; tratamento centralizado de exceções e logs estruturados. As configurações de JWT, Swagger, correlação, respostas HTTP e observabilidade foram adaptadas das implementações existentes. Os testes seguem Factories, AAA, xUnit e FluentAssertions.
-
-Não existem referências de projeto, consultas SQL, entidades compartilhadas ou migrations da API principal. Os identificadores externos são referências de negócio, sem chaves estrangeiras entre bancos.
-
-## Comportamento implementado
-
-- Cada orçamento pertence a uma OS, um cliente e uma versão. Serviços e peças mantêm identificadores, descrições, quantidades e preços congelados; uma nova versão não altera a anterior. A mesma peça pode aparecer em linhas com preços distintos, preservando os lançamentos da OS sem média ou agrupamento. A chave técnica dessas linhas fica somente na persistência.
-- A geração repetida com o mesmo snapshot e Saga retorna o orçamento existente. Conteúdo ou Saga divergentes para a mesma OS/versão retornam conflito.
-- Aprovação e recusa só ocorrem enquanto o orçamento aguarda aprovação. Repetir a mesma decisão não produz outro resultado. Cancelar preserva o snapshot e eventual decisão anterior; repetir o cancelamento exige o mesmo motivo.
-- Orçamento, contexto de integração e resultado na outbox são gravados na mesma transação SQL. `rowversion` protege alterações concorrentes; índices únicos impedem versões e resultados duplicados.
-- Resultados `OrcamentoGerado`, `OrcamentoDecidido` e `OrcamentoCancelado` ficam persistidos no envelope v1 do RFC-0007, com Saga, correlação, causação e traceparent validado. O publicador local mantém corpo/ID após falhas e usa lease e backoff. O adaptador SQS e os workers são ativados explicitamente na configuração; permanecem desligados por padrão.
-- O processador de comandos confirma recebimento, efeito e outbox em uma transação SQL. Reentregas compatíveis não duplicam efeitos; mesma identidade com conteúdo divergente é rejeitada. Cancelamento anterior à geração deixa um registro persistente que impede reabrir aquela versão, inclusive pelo caso de uso HTTP.
-
-O contexto da Saga é metadado de persistência/integração, sem dependência tecnológica no Domain. O total usa `decimal(18,2)`; valores inválidos, identificadores de serviço repetidos e totais que excedam esse limite são rejeitados antes da persistência.
+Clean Architecture separa Domain, Application, Infrastructure e API. Snapshots preservam preços e quantidades da versão aprovada. Transação SQL confirma estado, Inbox e Outbox; `rowversion` e restrições únicas protegem concorrência e duplicatas. A integração Mercado Pago fica na Infrastructure e não acopla o Domain ao provedor.
 
 ## Executar localmente
 
@@ -80,38 +61,7 @@ Todas as rotas abaixo exigem JWT válido; este serviço não emite tokens. Defau
 
 Cliente é limitado ao próprio `cliente_id` do JWT. Identificador ausente/inválido retorna `403`; orçamento de outro cliente retorna `404`. `202` comprova o commit local, sem afirmar conclusão da Saga ou entrega da mensagem.
 
-Exemplo de geração administrativa; substitua os UUIDs pelos identificadores da operação:
-
-```json
-{
-  "ordemServicoId": "11111111-1111-1111-1111-111111111111",
-  "clienteId": "22222222-2222-2222-2222-222222222222",
-  "versao": 1,
-  "contexto": {
-    "sagaId": "33333333-3333-3333-3333-333333333333",
-    "correlationId": "os-validacao-local",
-    "mensagemId": "44444444-4444-4444-4444-444444444444"
-  },
-  "servicos": [
-    {
-      "servicoId": "55555555-5555-5555-5555-555555555555",
-      "servicoCatalogoId": "66666666-6666-6666-6666-666666666666",
-      "descricao": "Troca de óleo",
-      "valor": 150.00
-    }
-  ],
-  "pecasInsumos": [
-    {
-      "pecaInsumoCatalogoId": "77777777-7777-7777-7777-777777777777",
-      "descricao": "Óleo lubrificante",
-      "quantidade": 2,
-      "valorUnitario": 45.00
-    }
-  ]
-}
-```
-
-Decisão: `{"versao":1,"decisao":1,"operacaoId":"88888888-8888-8888-8888-888888888888"}`; `1` aprova e `2` recusa. Cancelamento: `{"versao":1,"operacaoId":"99999999-9999-9999-9999-999999999999","motivo":"Solicitação cancelada"}`. O cliente não informa sua identidade no corpo da decisão.
+Decisão: `{"versao":1,"decisao":1,"operacaoId":"UUID"}`; `1` aprova e `2` recusa. No modo distribuído, geração e cancelamento são coordenados pela Saga; não usar as rotas administrativas para contornar esse fluxo.
 
 ## Pagamentos
 
@@ -142,7 +92,7 @@ Na [CI de referência do código entregue](https://github.com/oficina-mecanica-s
 
 A CI em `.github/workflows/ci.yml` reaproveita os jobs da API principal: detecção de escopo, Git Flow/estrutura, build, formatação, testes SQL com Docker, cobertura mínima de 90%, imagem Docker sem push e quality gate obrigatório. A imagem e a identificação da árvore validada ficam em artefato, preservando a referência para o futuro CD. Testes ignorados bloqueiam o aceite.
 
-O CI também valida Terraform e os guardrails executáveis da mensageria. O CD atual implanta exclusivamente a entrada FIFO/DLQ e os contratos SSM; não publica imagem nem implanta a aplicação. Por isso, não abre promoções para release/main. O CD completo do workload depende do banco e da credencial próprios, registry e rede; uma fila criada não comprova serviço implantado.
+O CI valida aplicação, cobertura, imagem e Terraform. O CD publica a imagem aprovada, aplica o plano salvo e verifica rollout/health.
 
 ```powershell
 dotnet restore OficinaMecanica.OrcamentoPagamento.sln
@@ -153,54 +103,7 @@ dotnet format OficinaMecanica.OrcamentoPagamento.sln --verify-no-changes --no-re
 
 Os testes de integração exigem Docker e criam SQL Server descartável com Testcontainers. Validam migrations, persistência real, rollback da transação, concorrência, idempotência, JWT, permissões e restrição por cliente. Não precisam de AWS nem de credenciais reais.
 
-## Processamento e garantias transacionais
-
-Os processadores aceitam geração/cancelamento de orçamento e criação de cobrança. A persistência de recebimentos, inclusive cancelamento antecipado, evita repetir efeitos locais. Os testes verificam falha após envio, retomada, rollback, concorrência e ligação por JSON com a Saga em bancos separados.
-
-Os processadores são resolvidos por DI; o publicador recebe um `ITransporteMensagem`. `TransporteArquivos` é um substituto local que escreve em `{diretorio}/{destino}/entrada/{mensagemId}.json`. O worker SQS depende da habilitação explícita descrita acima. Uma falha de processamento exige descartar o escopo de DI antes da nova tentativa; o worker cria um novo escopo em cada operação.
-
-O runtime requer banco/usuário isolados, fila/DLQ e configuração de workload/Gateway fornecidos pelas esteiras correspondentes. O publicador conserva a ordem global das pendências; sua concorrência/política de falha não deve ser ampliada sem testes do transporte real. A instrumentação nativa do Datadog acompanha a implantação. Progresso, dependências e critérios de aceite ficam no backlog canônico da API.
-
-Os testes do provedor substituto comprovam o comportamento local; não comprovam checkout ou Webhook reais do Mercado Pago. As evidências AWS e do fluxo distribuído dependem da integração e da janela de implantação coordenada.
-
-### Rastreamento das mensagens
-
-A emissão HTTP usa o middleware oficial do Serilog configurado como na API principal, com rota parametrizada, correlação e níveis consistentes. Healthcheck saudável não gera ruído no nível normal; avisos e erros permanecem visíveis. A origem do logger é SourceContext; mensagens das bibliotecas são preservadas, e SQL rotineiro fica fora do nível normal. Consulte a [convenção da RFC-0006](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/architecture/rfcs/rfc-0006-observabilidade-centralizada-com-datadog.md).
-
-A Infrastructure usa o SDK nativo Datadog 3.50.0, na mesma versão do profiler adotado na API principal. O consumidor restaura somente o `traceparent` validado; a Outbox captura o contexto ativo antes de persistir e o publicador retoma o contexto gravado. Reenvios não alteram o payload. Logs incluem IDs, correlação, resultado e duração, sem registrar corpo, credenciais ou dados pessoais. O escopo de consumo conclui após o commit do processador; o de publicação, após confirmar a Outbox. Falhas de instrumentação não mudam a transação de negócio.
-
-A criação/exportação dos spans exige profiler e Agent compatíveis no workload. Os testes locais sem profiler verificam logs, restauração de escopos, filtragem e preservação do carrier; não comprovam ingestão Datadog ou rastreamento distribuído implantado. Não há OpenTelemetry ou novo Agent.
-
-### Infraestrutura de mensageria
-
-O Terraform em `infra/terraform/environments/dev` segue os recursos da API: entrada FIFO por OS, deduplicação explícita, SSE gerenciada pelo SQS, visibilidade de 60 segundos, long polling de 20, cinco recebimentos antes da DLQ e retenções de quatro/14 dias. A política da DLQ permite redrive somente da entrada própria.
-
-Os contratos String são publicados em `/oficina-mecanica/development/orcamento-pagamento/{entrada_queue_url,entrada_queue_arn,dlq_url,dlq_arn}`. O parâmetro `/oficina-mecanica/development/status/orcamento-pagamento=ready` identifica somente essa infraestrutura, sem atestar banco, workload, processamento ou pagamento. Nenhuma credencial é publicada em SSM.
-
-A esteira exige `AWS_DEPLOY_ENABLED=true` no caller e no Environment, ref develop, Environment development e diretório dev. O merge mantém o bloqueio atual. State/cache são isolados por conta e ambiente e publicados somente em formato cifrado autenticado; plano e artefatos incluem run_id/run_attempt, SHA-256 e vínculo com conta, região, commit e ação. Somente o plano salvo é aplicado, e o state resultante é preservado inclusive após falha parcial.
-
-Sem cache, o primeiro ciclo exige destroy dedicado e consultas que comprovem ausência das filas e contratos deste owner. Não se descarta state nem se adota recurso órfão automaticamente. Um reset do laboratório pode remover as filas; ausência comprovada pode ser reconciliada, enquanto AccessDenied, token expirado ou resposta inválida bloqueiam.
-
-Destroy exige alteração explícita de `terraform-action.env`, confere novamente as pendências antes de aplicar e bloqueia enquanto o contrato do produtor OS existir. Entrada e DLQ precisam estar sem mensagens visíveis, em voo ou atrasadas; os contadores são aproximados e pressupõem produtores parados. Esse guardrail não consulta nem drena Outbox SQL. Após a remoção, a esteira confirma state sem recursos gerenciados e ausência real das filas, dos contratos e do namespace próprio. Não há purge ou redrive automático.
-
-Validação local sem AWS:
-
-```bash
-terraform fmt -check -recursive infra/terraform
-terraform -chdir=infra/terraform/environments/dev init -backend=false -input=false
-terraform -chdir=infra/terraform/environments/dev validate
-terraform -chdir=infra/terraform/environments/dev test
-```
-
-Os testes operacionais ficam inline no CI e executam os mesmos guardrails do CD com respostas substitutas. Eles não comprovam permissões IAM, filas reais ou acesso pelo workload. `TERRAFORM_ACTION=destroy` deve permanecer até a janela autorizada; retorno a apply também pode disparar operação e exige revisão própria.
-
-## Implantação da aplicação
-
-Na [ordem de apply da solução](https://github.com/oficina-mecanica-soat/oficina-mecanica-api#deploy-aws), este serviço sobe após RDS com banco próprio e API/OS com sua fila publicada. A primeira passagem usa worker e fluxo distribuído ligados, mas `MERCADO_PAGO_ATIVO=false`. Depois de os três serviços estarem saudáveis, o Gateway sobe uma vez com todas as rotas. Sua URL real permite configurar Webhook e assinatura; somente então a mesma esteira atualiza este workload com `MERCADO_PAGO_ATIVO=true`. Não iniciar checkout ou jornadas financeiras antes da configuração completa; health não comprova disponibilidade do provedor.
-
-O CD segue a API principal: resolve a ação, valida dependências, salva o plano, publica a mesma imagem aprovada pela CI, aplica exclusivamente esse plano e confere rollout/health. O build não é refeito durante o deploy: o conteúdo da imagem precisa corresponder à árvore Git integrada. A aplicação usa namespace próprio, Deployment, ConfigMap, Secret, Service NodePort e HPA. Recursos, probes e admissão Datadog seguem a API; não há novo Agent.
-
-O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamento` pertencem ao contrato RDS próprio. O CD exige os status de Kubernetes, RDS e banco isolado em ready, confere o registry da mesma conta/região e busca somente o secret exclusivo. Não utiliza master_secret_arn nem credencial da API. O startup aplica as migrations do serviço, como na API, com a permissão limitada ao banco próprio.
+## Configuração de development
 
 | Configuração do Environment development | Uso |
 | --- | --- |
@@ -212,14 +115,20 @@ O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamen
 | `PROCESSAMENTO_REMOTO_ENABLED` | Variable false por padrão; true exige validar a fila FIFO real de resultados OS |
 | `MERCADO_PAGO_ATIVO` | Variable false por padrão; ativação exige os secrets e Variables da tabela Mercado Pago acima |
 
-O Environment permite somente a branch develop, como na API. `AWS_DEPLOY_ENABLED` e `AUTO_PR_ENABLED` permanecem sujeitos à autorização da janela. Habilitar uma opção funcional não habilita AWS. Homologation/production seguem os registros lógicos das esteiras existentes; nenhuma promoção é automática sem os gates, e nenhum workflow aprova PRs.
+O banco `OficinaMecanicaOrcamentoPagamento` e o login `oficina_orcamento_pagamento` são preparados pela esteira RDS, com acesso restrito ao banco próprio. O CD obtém o secret exclusivo; não utiliza a credencial master ou da API. Workload no EKS usa NodePort 30082 e listener privado 8082. HPA acadêmico de uma a duas réplicas; não representa dimensionamento de produção.
 
-O NodePort contratual do serviço é 30082, obtido de `kubernetes/orcamento_pagamento_internal_node_port` e validado pela esteira, distinto da API; o ingresso privado e o roteamento público pertencem às esteiras Kubernetes/Gateway. O status `/oficina-mecanica/development/status/orcamento-pagamento-aplicacao` começa em implantacao-pendente, é invalidado antes de um novo apply e só vira ready após rollout da imagem esperada, conferência do Service e health HTTP privado. Filas prontas não substituem essa prova. O parâmetro `orcamento-pagamento/fluxo_distribuido_habilitado` informa o modo aplicado e deve ser consumido junto desse status. Mudanças no ConfigMap provocam novo rollout pelo checksum no template dos pods.
+A primeira implantação mantém Mercado Pago desligado. Após existir a URL pública do Gateway, configurar notificações `payment` e assinatura na aplicação vendedora de teste; então reaplicar a configuração pela esteira. Health não comprova disponibilidade do pagamento.
 
-Planos e states contêm material sensível do Secret Kubernetes. Antes de upload/cache, a esteira usa AES-256-GCM com nonce aleatório e autenticação do contexto (repositório, conta, ambiente; plano também inclui execução, tentativa e commit). A chave vem exclusivamente do Environment e não é fornecida ao CI de PR. Só o pacote cifrado do plano e os states cifrados são publicados. Chave incorreta, arquivo alterado ou contexto divergente bloqueiam a restauração, sem assumir state vazio.
+Logs HTTP usam a mesma convenção dos demais serviços. Outbox propaga o `traceparent` validado, e logs incluem os IDs de correlação. Consulte a [RFC-0006 de observabilidade](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/architecture/rfcs/rfc-0006-observabilidade-centralizada-com-datadog.md).
 
-Não rotacionar essa chave sem procedimento de migração e recuperação: ela é necessária para ler os caches. O prefixo enc-v1 não importa automaticamente caches antigos sem proteção. Se existir state anterior, preserve-o e faça migração revisada; ausência de cache não autoriza adotar ou destruir recursos órfãos. A solução atual contém o risco do cache; backend remoto protegido e durável continua sendo evolução registrada no backlog. Referências: [restrições de acesso ao cache do Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) e [criptografia autenticada do Node.js](https://nodejs.org/api/crypto.html).
+## Operação e documentação
 
-No destroy, a esteira exige primeiro a remoção do Gateway e do produtor OS, além das filas sem pendências. Remove somente os recursos próprios. Se um reset já removeu o EKS, a ausência precisa ser confirmada antes da recuperação declarativa dos vínculos Kubernetes; AccessDenied bloqueia. A exclusão do workload não remove banco ou login, cujo ciclo de vida pertence ao RDS. Provas locais/mocks não comprovam IAM, RBAC, rede, FIFO/DLQ, pagamento ou ingestão Datadog no laboratório.
+- [Visão geral, arquitetura e ordem das esteiras](https://github.com/oficina-mecanica-soat/oficina-mecanica-api#deploy-aws).
+- [Configuração, primeira aplicação e recuperação após Reset](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/deploy/deploy-aws.md).
+- [Collection consolidada e ambientes Local/Development](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/evidencias/postman.md).
 
-No laboratório, o HPA mantém uma a duas réplicas, utilizando CPU e memória. O limite é compatível com os dois nodes `t3.small` compartilhados com OS, Execução e observabilidade; não representa capacidade dimensionada para produção. Ampliar o máximo exige dimensionar a plataforma antes, para não produzir Pods permanentemente sem espaço de agendamento.
+Todo provisionamento, atualização e destroy na AWS ocorre pelas esteiras oficiais. O controle é `infra/terraform/environments/dev/terraform-action.env`; destroy exige alteração dedicada e verificação dos consumidores. `AWS_DEPLOY_ENABLED` autoriza a janela real, e `AUTO_PR_ENABLED` controla somente a abertura de promoções. Alterar uma Variable não dispara o CD.
+
+Um ambiente disponível pode ser testado sem destroy. Sem estado compatível, alguns owners exigem primeiro uma recuperação por destroy dedicado com inventário vazio comprovado. Não apague recursos ou caches para contornar o bloqueio; consulte o guia antes de iniciar uma conta ou retomar um laboratório.
+
+Fluxo Git: branch de trabalho → PR para `develop` → `release` → `main`. O CD físico ocorre em development; release e production registram promoções lógicas. PRs e merges permanecem sujeitos aos checks e à revisão. Mudanças somente em README/docs não exigem deploy físico pelos detectores atuais.
