@@ -1,0 +1,1080 @@
+name: "🧪 CI"
+run-name: "🧪 Validar código · ${{ github.head_ref || github.ref_name }}"
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - release
+      - "release/**"
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  detect_ci_scope:
+    name: "🔎 00 · Detectar escopo do PR"
+    runs-on: ubuntu-latest
+    outputs:
+      ci_required: ${{ steps.detect.outputs.ci_required }}
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: "🔍 02 · Analisar arquivos alterados"
+        id: detect
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          ci_required=false
+          changed_files="$(mktemp)"
+
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+
+          if [ ! -s "$changed_files" ]; then
+            echo "Nenhum arquivo alterado encontrado. Executando a CI completa por segurança."
+            ci_required=true
+          else
+            echo "Arquivos alterados:"
+            cat "$changed_files"
+
+            while IFS= read -r file; do
+              case "$file" in
+                *.md)
+                  ;;
+                *)
+                  ci_required=true
+                  break
+                  ;;
+              esac
+            done < "$changed_files"
+          fi
+
+          echo "ci_required=$ci_required" >> "$GITHUB_OUTPUT"
+          echo "CI necessária: $ci_required"
+
+  validate_git_flow:
+    name: "🔀 01 · Validar fluxo de branches"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 Conferir estrutura do repositório"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: "📁 Bloquear pastas extras e diretórios de scripts"
+        run: |
+          node <<'VALIDAR_ESTRUTURA'
+          const cp = require('node:child_process');
+          const nomes = args => cp.execFileSync('git', args, { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+          const assert = require('node:assert/strict');
+          // Estrutura aprovada do projeto, válida também em promoções para branches antigas.
+          const raizes = new Set([".agents", ".github", "docs", "infra", "k8s", "src", "tests"]);
+          function foraDoPadrao(arquivos) {
+            return arquivos.filter(nome => {
+              const pastas = nome.split('/').slice(0, -1);
+              return pastas.some(pasta => pasta.toLowerCase() === 'scripts') || (pastas.length > 0 && !raizes.has(pastas[0]));
+            });
+          }
+          assert.deepEqual(foraDoPadrao(['src/Caso/Novo.cs']), []);
+          assert.deepEqual(foraDoPadrao(['scripts/local.ps1', '.github/scripts/check.cjs', 'pasta-extra/arquivo']), ['scripts/local.ps1', '.github/scripts/check.cjs', 'pasta-extra/arquivo']);
+          const invalidos = foraDoPadrao(nomes(['ls-files']));
+          if (invalidos.length) throw new Error('Estrutura fora do padrão aprovado: ' + invalidos.join(', '));
+          console.log('Estrutura existente preservada; nenhuma pasta de scripts versionada.');
+          VALIDAR_ESTRUTURA
+
+      - name: "🔀 01 · Conferir origem e destino do PR"
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          echo "Branch de destino: $BASE_BRANCH"
+          echo "Branch de origem: $HEAD_BRANCH"
+
+          case "$BASE_BRANCH" in
+            develop)
+              case "$HEAD_BRANCH" in
+                main|release|release/*)
+                  echo "Branches protegidas de estágio não podem abrir PR de retorno para develop."
+                  exit 1
+                  ;;
+                *)
+                  echo "PR para develop segue a entrada do Git Flow."
+                  ;;
+              esac
+              ;;
+
+            release|release/*)
+              if [ "$HEAD_BRANCH" != "develop" ]; then
+                echo "PRs para release devem vir de develop."
+                exit 1
+              fi
+
+              echo "PR para release segue a promoção do Git Flow."
+              ;;
+
+            main)
+              case "$HEAD_BRANCH" in
+                release|release/*)
+                  echo "PR para main segue a promoção do Git Flow."
+                  ;;
+                *)
+                  echo "PRs para main devem vir de release ou release/*."
+                  exit 1
+                  ;;
+              esac
+              ;;
+
+            *)
+              echo "Branch protegida de destino não suportada: $BASE_BRANCH"
+              exit 1
+              ;;
+          esac
+
+  build_application:
+    name: "🏗️ 02 · Build da aplicação"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Instalar SDK do .NET"
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: "📦 03 · Restaurar cache de pacotes NuGet"
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: "📚 04 · Resolver dependências do projeto (dotnet restore)"
+        run: dotnet restore OficinaMecanica.OrcamentoPagamento.sln
+
+      - name: "🔨 05 · Compilar a solução"
+        run: dotnet build OficinaMecanica.OrcamentoPagamento.sln --configuration Release --no-restore
+
+  verify_code_style:
+    name: "🎨 03 · Verificar padrão de código"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Instalar SDK do .NET"
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: "📚 03 · Resolver dependências do projeto (dotnet restore)"
+        run: dotnet restore OficinaMecanica.OrcamentoPagamento.sln
+
+      - name: "✅ 04 · Verificar formatação do código"
+        run: dotnet format OficinaMecanica.OrcamentoPagamento.sln --verify-no-changes --no-restore
+
+  test_application:
+    name: "🧪 04 · Testar aplicação"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Instalar SDK do .NET"
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: "📦 03 · Restaurar cache de pacotes NuGet"
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.sln', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: "📚 04 · Resolver dependências do projeto (dotnet restore)"
+        run: dotnet restore OficinaMecanica.OrcamentoPagamento.sln
+
+      - name: "🔨 05 · Compilar a solução"
+        run: dotnet build OficinaMecanica.OrcamentoPagamento.sln --configuration Release --no-restore
+
+      - name: "🧪 06 · Executar testes com cobertura"
+        run: >
+          dotnet test OficinaMecanica.OrcamentoPagamento.sln
+          --configuration Release
+          --no-build
+          --collect:"XPlat Code Coverage"
+          --settings tests/sonarqube.runsettings
+          --results-directory ./TestResults
+          --logger "trx"
+
+      - name: "🔍 07 · Validar resultados dos testes"
+        shell: pwsh
+        run: |
+          $trxFiles = Get-ChildItem -Path TestResults -Recurse -Filter *.trx
+
+          if (-not $trxFiles) {
+            throw "Nenhum arquivo TRX foi gerado."
+          }
+
+          $total = 0
+          $passed = 0
+          $failed = 0
+          $skipped = 0
+
+          foreach ($trxFile in $trxFiles) {
+            [xml]$trx = Get-Content -LiteralPath $trxFile.FullName
+            $counters = $trx.TestRun.ResultSummary.Counters
+
+            $total += [int]$counters.total
+            $passed += [int]$counters.passed
+            $failed += [int]$counters.failed
+            $skipped += [int]$counters.notExecuted
+          }
+
+          Write-Host "Tests: total=$total passed=$passed failed=$failed skipped=$skipped"
+
+          if ($total -eq 0) {
+            throw "Nenhum teste foi executado."
+          }
+
+          if ($failed -gt 0) {
+            throw "Existem testes com falha."
+          }
+
+          if ($skipped -gt 0) {
+            throw "A CI exige zero testes ignorados. Confira o Docker antes de coletar cobertura."
+          }
+
+      - name: "📊 08 · Gerar relatório de cobertura"
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          reportgenerator \
+            -reports:"TestResults/**/coverage.cobertura.xml" \
+            -targetdir:"TestResults/CoverageReport" \
+            -reporttypes:"HtmlInline_AzurePipelines;Cobertura;MarkdownSummaryGithub"
+
+      - name: "📈 09 · Validar limite mínimo de cobertura"
+        shell: pwsh
+        run: |
+          [xml]$coverage = Get-Content -LiteralPath TestResults/CoverageReport/Cobertura.xml
+          $lineRate = [double]::Parse($coverage.coverage.'line-rate', [System.Globalization.CultureInfo]::InvariantCulture)
+          $lineCoverage = [math]::Round($lineRate * 100, 2)
+
+          Write-Host "Line coverage: $lineCoverage%"
+
+          if ($lineCoverage -lt 90) {
+            throw "Line coverage $lineCoverage% is below the required 90% threshold."
+          }
+
+      - name: "⬆️ 10 · Publicar artefatos de teste e cobertura"
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-and-coverage-results
+          path: |
+            TestResults/**/*.trx
+            TestResults/**/coverage.cobertura.xml
+            TestResults/CoverageReport/**
+          if-no-files-found: error
+
+  build_container_image:
+    name: "🐳 05 · Build da imagem Docker"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Configurar Docker Buildx"
+        uses: docker/setup-buildx-action@v4
+
+      - name: "🔨 03 · Compilar imagem Docker"
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          tags: oficina-mecanica-orcamento-pagamento:ci
+          outputs: type=docker,dest=${{ runner.temp }}/orcamento-pagamento-image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: "🧾 04 · Identificar o conteúdo validado"
+        run: git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/source-tree.txt"
+
+      - name: "⬆️ 05 · Publicar imagem para o CD"
+        if: github.base_ref == 'develop'
+        uses: actions/upload-artifact@v7
+        with:
+          name: orcamento-pagamento-image-pr-${{ github.event.pull_request.number }}
+          path: |
+            ${{ runner.temp }}/orcamento-pagamento-image.tar
+            ${{ runner.temp }}/source-tree.txt
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  validate_terraform:
+    name: "🌐 05.1 · Validar infraestrutura e aplicação"
+    needs: detect_ci_scope
+    if: needs.detect_ci_scope.outputs.ci_required == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TF_WORKING_DIRECTORY: infra/terraform/environments/dev
+    steps:
+      - name: "📥 01 · Baixar código do repositório"
+        uses: actions/checkout@v7
+
+      - name: "🛠️ 02 · Instalar Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.15.8"
+          terraform_wrapper: false
+
+      - name: "🧪 03 · Testar os guardrails reais sem AWS"
+        run: |
+          node <<'PREPARAR_TESTES_MENSAGERIA'
+          const fs = require('node:fs'), path = require('node:path');
+          const origem = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r\n/g, '\n');
+          for (const [file,tag] of [['mensageria-orcamento.cjs','VALIDAR_MENSAGERIA'],['aplicacao-orcamento.cjs','VALIDAR_APLICACAO'],['proteger-artefatos.cjs','PROTEGER_ARTEFATOS'],['prepare-destroy-orcamento.cjs','PREPARAR_DESTROY']]) {
+            const inicio=origem.indexOf('          cat > "'+String.fromCharCode(36)+'RUNNER_TEMP/'+file+'" <<\''+tag+'\'');
+            const linhas=origem.slice(inicio).split('\n'),fim=linhas.findIndex(l=>l.trim()===tag);
+            if(inicio<0||fim<1)throw Error('Validação real ausente: '+file);
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP,file),linhas.slice(1,fim).map(l=>l.slice(10)).join('\n'));
+          }
+          PREPARAR_TESTES_MENSAGERIA
+      - name: "🧪 Testar ownership, filas e plano salvo"
+        run: |
+          cat > "$RUNNER_TEMP/mensageria-orcamento.test.cjs" <<'TESTE_MENSAGERIA'
+          const { test } = require('node:test');
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const os = require('node:os');
+          const cp = require('node:child_process');
+          const h = require('./mensageria-orcamento.cjs');
+          const conta = '123456789012', regiao = 'us-east-1', ambiente = 'development';
+          const n = h.nomes(ambiente);
+          const c = {
+            entrada_queue_url: 'https://sqs.us-east-1.amazonaws.com/' + conta + '/' + n.fila + '.fifo',
+            entrada_queue_arn: 'arn:aws:sqs:us-east-1:' + conta + ':' + n.fila + '.fifo',
+            dlq_url: 'https://sqs.us-east-1.amazonaws.com/' + conta + '/' + n.fila + '-dlq.fifo',
+            dlq_arn: 'arn:aws:sqs:us-east-1:' + conta + ':' + n.fila + '-dlq.fifo'
+          };
+          function state() {
+            return { resources: [
+              { mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_entrada', instances: [{ attributes: { id: c.entrada_queue_url, arn: c.entrada_queue_arn } }] },
+              { mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_dlq', instances: [{ attributes: { id: c.dlq_url, arn: c.dlq_arn } }] },
+              { mode: 'managed', type: 'aws_sqs_queue_redrive_allow_policy', name: 'orcamento_pagamento_dlq', instances: [{ attributes: { queue_url: c.dlq_url } }] },
+              { mode: 'managed', type: 'aws_ssm_parameter', name: 'orcamento_pagamento_mensageria', instances: Object.keys(c).map(k => ({ attributes: { name: n.prefixo + '/' + k, arn: 'arn:aws:ssm:' + regiao + ':' + conta + ':parameter' + n.prefixo + '/' + k } })) }
+            ] };
+          }
+          const vazio = () => null;
+          function awsInfra(...args) {
+            if (args[0] === 'ssm') {
+              const nome = args[args.indexOf('--name') + 1];
+              return { Parameter: { Type: 'String', Value: nome === n.status ? 'ready' : c[nome.split('/').pop()] } };
+            }
+            const dlq = args.includes(c.dlq_url);
+            return { Attributes: {
+              QueueArn: dlq ? c.dlq_arn : c.entrada_queue_arn, FifoQueue: 'true', ContentBasedDeduplication: 'false', SqsManagedSseEnabled: 'true',
+              MessageRetentionPeriod: dlq ? '1209600' : '345600', VisibilityTimeout: '60', ReceiveMessageWaitTimeSeconds: '20',
+              RedrivePolicy: JSON.stringify({ maxReceiveCount: 5, deadLetterTargetArn: c.dlq_arn }),
+              RedriveAllowPolicy: JSON.stringify({ redrivePermission: 'byQueue', sourceQueueArns: [c.entrada_queue_arn] })
+            } };
+          }
+          test('state preserva conta, região, owner e nomes dos recursos', () => {
+            h.validarState(state(), conta, regiao, ambiente);
+            assert.deepEqual(h.contratos(state()), c);
+            for (const outraConta of ['000000000000', 'outra']) assert.throws(() => h.validarState(state(), outraConta, regiao, ambiente));
+            assert.throws(() => h.validarState(state(), conta, 'us-west-2', ambiente));
+            assert.throws(() => h.nomes('production'));
+            for (const alterar of [s => s.resources[0].name = 'outro_owner', s => s.resources[0].type = 'aws_db_instance', s => s.resources[0].mode = 'data', s => s.resources[0].module = 'module.outra', s => s.resources[3].instances[0].attributes.name = '/segredo/outro']) {
+              const s = state(); alterar(s); assert.throws(() => h.validarState(s, conta, regiao, ambiente));
+            }
+            assert.throws(() => h.validarState({}, conta, regiao, ambiente));
+          });
+          test('bootstrap só aceita inventário vazio do owner e respostas válidas', () => {
+            const aws = (...args) => args[1] === 'describe-parameters' ? { Parameters: [] } : null;
+            h.verificarVazio(ambiente, aws);
+            assert.throws(() => h.verificarVazio(ambiente, () => ({ QueueUrl: c.entrada_queue_url })));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a[1] === 'describe-parameters' ? {} : null));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a[1] === 'describe-parameters' ? { Parameters: [{ Name: n.prefixo + '/entrada_queue_url' }] } : null));
+            assert.throws(() => h.verificarVazio(ambiente, (...a) => a.includes(n.status) ? { Parameter: {} } : aws(...a)));
+          });
+          test('ausência exige código específico, nunca AccessDenied ou erro de rede', () => {
+            assert.equal(h.ausente(['sqs'], { stderr: '(QueueDoesNotExist)' }), true);
+            assert.equal(h.ausente(['ssm'], { stderr: '(ParameterNotFound)' }), true);
+            for (const stderr of ['AccessDenied', 'ExpiredToken', 'timeout', '(ParameterNotFound)']) assert.equal(h.ausente(['sqs'], { stderr }), false);
+          });
+          test('destroy exige produtor removido e filas sem mensagens de qualquer categoria', () => {
+            const aws = (...args) => args[0] === 'ssm' ? null : { Attributes: { ApproximateNumberOfMessages: '0', ApproximateNumberOfMessagesNotVisible: '0', ApproximateNumberOfMessagesDelayed: '0' } };
+            h.pendencias(c, ambiente, aws);
+            h.pendencias(c, ambiente, vazio);
+            assert.throws(() => h.pendencias(c, ambiente, () => ({ Parameter: { Value: 'ready' } })));
+            for (const campo of ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible', 'ApproximateNumberOfMessagesDelayed']) {
+              for (const valor of ['1', '-1', '', undefined, 0, 'não-numérico']) {
+                assert.throws(() => h.pendencias(c, ambiente, (...args) => args[0] === 'ssm' ? null : { Attributes: { ...aws(...args).Attributes, [campo]: valor } }));
+              }
+            }
+            assert.throws(() => h.pendencias({ ...c, dlq_url: '' }, ambiente, aws));
+          });
+          test('após apply confere FIFO, SSE, redrive e todos os contratos SSM', () => {
+            h.verificarInfra(c, ambiente, awsInfra);
+            for (const alterar of [a => a.FifoQueue = 'false', a => a.SqsManagedSseEnabled = 'false', a => a.VisibilityTimeout = '1', a => a.RedrivePolicy = '{}', a => a.RedriveAllowPolicy = '{}', a => a.QueueArn = 'arn-outro']) {
+              assert.throws(() => h.verificarInfra(c, ambiente, (...args) => {
+                const r = awsInfra(...args); if (r.Attributes) alterar(r.Attributes); return r;
+              }));
+            }
+            for (const campo of ['Type', 'Value']) assert.throws(() => h.verificarInfra(c, ambiente, (...args) => {
+              const r = awsInfra(...args); if (r.Parameter) r.Parameter[campo] = 'divergente'; return r;
+            }));
+          });
+          test('remoção confirma filas e SSM; falha de consulta continua bloqueando', () => {
+            h.verificarRemocao(c, ambiente, vazio);
+            assert.throws(() => h.verificarRemocao(c, ambiente, () => ({})));
+            assert.throws(() => h.verificarRemocao(c, ambiente, () => { throw Error('AccessDenied'); }));
+          });
+          test('plano proíbe outros owners, substituição no apply e criação no destroy', () => {
+            const plano = acoes => ({ format_version: '1.2', planned_values: {}, resource_changes: [{ mode: 'managed', type: 'aws_sqs_queue', name: 'orcamento_pagamento_entrada', change: { actions: acoes, after: { name: n.fila + '.fifo' } } }] });
+            h.validarPlano(plano(['create']), 'apply');
+            h.validarPlano(plano(['update']), 'apply');
+            h.validarPlano(plano(['delete']), 'destroy');
+            h.validarPlano({ format_version: '1.2', planned_values: {} }, 'destroy');
+            for (const acoes of [[], ['create'], ['update'], ['delete', 'create'], ['forget']]) assert.throws(() => h.validarPlano(plano(acoes), 'destroy'));
+            for (const acoes of [['delete'], ['delete', 'create'], []]) assert.throws(() => h.validarPlano(plano(acoes), 'apply'));
+            const outro = plano(['create']); outro.resource_changes[0].type = 'aws_iam_role'; assert.throws(() => h.validarPlano(outro, 'apply'));
+            const filaAlheia = plano(['create']); filaAlheia.resource_changes[0].change.after.name = 'fila-outro-owner.fifo'; assert.throws(() => h.validarPlano(filaAlheia, 'apply'));
+            const parametroAlheio = plano(['create']); Object.assign(parametroAlheio.resource_changes[0], { type: 'aws_ssm_parameter', name: 'orcamento_pagamento_mensageria' }); parametroAlheio.resource_changes[0].change.after.name = '/outro-owner/token'; assert.throws(() => h.validarPlano(parametroAlheio, 'apply'));
+            assert.throws(() => h.validarPlano({}, 'apply'));
+          });
+          const deploy = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r\n/g, '\n');
+          const cd = fs.readFileSync('.github/workflows/cd-development.yml', 'utf8');
+          const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+          test('barreira real bloqueia flags, refs e ambientes indevidos antes de AWS', () => {
+            const bloco = deploy.match(/      - name: "🛡️ Conferir habilitação do deploy AWS"\n([\s\S]*?)(?=      - name:)/)[1];
+            const gates = [...deploy.matchAll(/      - name: "🛡️ Conferir habilitação do deploy AWS"\n([\s\S]*?)(?=      - name:)/g)].map(m => m[1].split('        run: |\n')[1].trim());
+            assert.equal(gates.length, 5);
+            assert(gates.every(g => g === gates[0]), 'Todos os jobs operacionais devem repetir a mesma barreira.');
+            const script = bloco.split('        run: |\n')[1].split('\n').map(l => l.slice(10)).join('\n').trim();
+            const env = { ...process.env, DEPLOY_ENABLED: 'true', GITHUB_REF: 'refs/heads/develop', DEPLOY_ENVIRONMENT: 'development', TF_ENVIRONMENT: 'dev', SSM_ENVIRONMENT_NAME: 'development' };
+            const run = alteracoes => cp.spawnSync(bash, ['-e', '-c', script], { env: { ...env, ...alteracoes }, encoding: 'utf8' });
+            assert.equal(run({}).status, 0);
+            for (const DEPLOY_ENABLED of ['', 'false', 'TRUE', 'true ']) assert.notEqual(run({ DEPLOY_ENABLED }).status, 0);
+            for (const [k,v] of [['GITHUB_REF','refs/heads/main'], ['GITHUB_REF','refs/tags/v1'], ['DEPLOY_ENVIRONMENT','production'], ['TF_ENVIRONMENT','../dev'], ['SSM_ENVIRONMENT_NAME','homologation']]) assert.notEqual(run({ [k]:v }).status, 0);
+            assert(cd.includes("vars.AWS_DEPLOY_ENABLED == 'true'"));
+            assert(cd.includes('VALIDAR_PROMOCAO_CUMULATIVA'), 'Promoção exige conteúdo cumulativo e implantação integral.');
+          });
+          test('resolver real exige ação válida e alteração explícita para destroy', () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oficina-testar-acao-'));
+            assert(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep));
+            try {
+              const git = args => cp.execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: ['ignore','pipe','pipe'] }).trim();
+              git(['init','-q']); git(['config','user.name','Teste local']); git(['config','user.email','teste@example.invalid']);
+              const infra = path.join(dir, 'infra/terraform/environments/dev'); fs.mkdirSync(infra, { recursive: true });
+              const control = path.join(infra, 'terraform-action.env');
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=destroy\n'); git(['add','.']); git(['commit','-qm','base']); const base = git(['rev-parse','HEAD']);
+              const bloco = deploy.match(/      - name: "🚦 02 · Ler ação e exigir destroy dedicado"\n([\s\S]*?)(?=  prepare_and_plan:)/)[1];
+              const script = bloco.split('        run: |\n')[1].split('\n').map(l => l.slice(10)).join('\n').trim();
+              const executar = anterior => cp.spawnSync(bash, ['-e','-c',script], { cwd: dir, encoding: 'utf8', env: { ...process.env, TF_WORKING_DIRECTORY:'infra/terraform/environments/dev', GITHUB_BEFORE: anterior, GITHUB_SHA: git(['rev-parse','HEAD']), GITHUB_OUTPUT: path.join(dir,'output') } });
+              assert.notEqual(executar(base).status, 0);
+              fs.appendFileSync(control, '# destroy dedicado\n'); git(['add','.']); git(['commit','-qm','destroy dedicado']);
+              assert.equal(executar(base).status, 0);
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=apply\n'); assert.equal(executar(base).status, 0);
+              fs.writeFileSync(control, 'TERRAFORM_ACTION=outro\n'); assert.notEqual(executar(base).status, 0);
+            } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+          });
+          test('artefatos usam tentativa e commit; state parcial é preservado', () => {
+            const nomes = [...deploy.matchAll(/name: (tfplan-orcamento-pagamento-[^\n]+)/g)].map(m => m[1]);
+            assert.equal(nomes.length, 2); assert.equal(nomes[0], nomes[1]);
+            assert(nomes.every(n => n.includes('github.run_id') && n.includes('github.run_attempt')));
+            assert(deploy.includes('sha256sum -c tfplan.sha256'));
+            assert(deploy.includes('source-commit.txt'));
+            assert(deploy.includes("if: always() && steps.apply.outcome != 'skipped'"));
+            assert(!deploy.includes('restore-keys: tfstate-'));
+            assert(deploy.includes('docker load --input'));
+            assert(deploy.includes('docker push'));
+            assert(deploy.includes('source-tree.txt'));
+            assert(deploy.includes('tfplan.bundle.enc'));
+            assert(deploy.includes('terraform.tfstate.enc'));
+            assert(!deploy.includes('path: ${{ env.TF_WORKING_DIRECTORY }}/tfplan\n'));
+            assert(deploy.includes("steps.proteger_state.outcome == 'success'"));
+            assert(!deploy.includes('terraform destroy'));
+          });
+
+          test('plano salvo permanece vinculado a conta, região, ambiente, ação e commit', () => {
+            const esperado = { conta, regiao, ambiente, acao: 'apply', commit: 'a'.repeat(40) };
+            h.validarContextoPlano({ ...esperado }, esperado);
+            for (const campo of Object.keys(esperado)) assert.throws(() => h.validarContextoPlano({ ...esperado, [campo]: 'divergente' }, esperado));
+            assert.throws(() => h.validarContextoPlano({}, esperado));
+            assert.throws(() => h.validarContextoPlano({ ...esperado, extra: 'não permitido' }, esperado));
+          });
+
+          TESTE_MENSAGERIA
+          node --test "$RUNNER_TEMP/mensageria-orcamento.test.cjs"
+      - name: "🧪 Testar composição, recuperação e proteção dos artefatos"
+        run: |
+          cat > "$RUNNER_TEMP/aplicacao-orcamento.test.cjs" <<'TESTAR_APLICACAO'
+          const { test } = require('node:test');
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const os = require('node:os');
+          const crypto = require('node:crypto');
+          const cp = require('node:child_process');
+          const app = require('./aplicacao-orcamento.cjs');
+          const protecao = require('./proteger-artefatos.cjs');
+          const destroy = require('./prepare-destroy-orcamento.cjs');
+          const conta = '123456789012';
+          const regiao = 'us-east-1';
+          const validarPlano = (r, a) => app.validarPlanoRecurso(r, a, conta, regiao);
+          const base = '/oficina-mecanica/development';
+          const secretArn =
+            'arn:aws:secretsmanager:' +
+            regiao +
+            ':' +
+            conta +
+            ':secret:oficina-mecanica/development/rds/orcamento-pagamento-Ab123Z';
+          const senha = 'a'.repeat(96) + '!Aa9';
+          const env = {
+            AWS_REGION: regiao,
+            SSM_ENVIRONMENT_NAME: 'development',
+            GITHUB_REF: 'refs/heads/develop',
+            GITHUB_SHA: 'a'.repeat(40),
+            JWT_SECRET: 'chave-sintetica-de-teste-maior-que-32-bytes',
+            JWT_ISSUER: 'oficina-mecanica-auth',
+            JWT_AUDIENCE: 'oficina-mecanica-api'
+          };
+          const parametros = {
+            'status/kubernetes': 'ready',
+            'status/rds': 'ready',
+            'status/rds-orcamento-pagamento': 'ready',
+            'kubernetes/orcamento_pagamento_internal_node_port': '30082',
+            'kubernetes/cluster_name': 'oficina-mecanica-eks-dev',
+            'kubernetes/orcamento_pagamento_ecr_repository_name': app.nome,
+            'kubernetes/orcamento_pagamento_ecr_repository_url':
+              conta + '.dkr.ecr.' + regiao + '.amazonaws.com/' + app.nome,
+            'rds/orcamento-pagamento/database_name': 'OficinaMecanicaOrcamentoPagamento',
+            'rds/orcamento-pagamento/secret_arn': secretArn,
+            'rds/endpoint': 'banco.exemplo.us-east-1.rds.amazonaws.com',
+            'status/api': 'ready',
+            'api/entrada_queue_url':
+              'https://sqs.' + regiao + '.amazonaws.com/' + conta + '/oficina-mecanica-api-development.fifo',
+            'api/entrada_queue_arn': 'arn:aws:sqs:' + regiao + ':' + conta + ':oficina-mecanica-api-development.fifo'
+          };
+          function aws(...args) {
+            if (args[0] === 'sts') return { Account: conta };
+            if (args[0] === 'ssm') {
+              const nome = args[args.indexOf('--name') + 1];
+              return { Parameter: { Type: 'String', Value: parametros[nome.slice(base.length + 1)] } };
+            }
+            if (args[0] === 'eks')
+              return {
+                cluster: {
+                  arn: 'arn:aws:eks:' + regiao + ':' + conta + ':cluster/oficina-mecanica-eks-dev',
+                  status: 'ACTIVE',
+                  tags: { Repository: 'oficina-mecanica-infra-kubernetes', Environment: 'development' }
+                }
+              };
+            if (args[0] === 'ecr')
+              return {
+                repositories: [
+                  {
+                    repositoryUri: parametros['kubernetes/orcamento_pagamento_ecr_repository_url'],
+                    registryId: conta,
+                    imageTagMutability: 'IMMUTABLE'
+                  }
+                ]
+              };
+            if (args[0] === 'sqs')
+              return { Attributes: { QueueArn: parametros['api/entrada_queue_arn'], FifoQueue: 'true' } };
+            if (args[1] === 'describe-secret')
+              return {
+                ARN: secretArn,
+                Name: 'oficina-mecanica/development/rds/orcamento-pagamento',
+                Tags: [{ Key: 'Repository', Value: 'oficina-mecanica-infra-rds' }]
+              };
+            if (args[1] === 'get-secret-value')
+              return {
+                SecretString: JSON.stringify({
+                  username: 'oficina_orcamento_pagamento',
+                  database: 'OficinaMecanicaOrcamentoPagamento',
+                  password: senha
+                })
+              };
+            throw Error('Consulta sintética não prevista.');
+          }
+          test('composição usa somente banco/login e registry próprios, mantendo ativações desligadas', () => {
+            const chamadas = [];
+            const v = app.configuracao(env, (...args) => {
+              chamadas.push(args);
+              return aws(...args);
+            });
+            assert(
+              v.db_connection_string.includes(
+                'Database=OficinaMecanicaOrcamentoPagamento;User Id=oficina_orcamento_pagamento;'
+              )
+            );
+            assert(v.aplicacao_image_uri.endsWith('/' + app.nome + ':sha-' + env.GITHUB_SHA));
+            assert.equal(v.processamento_remoto_habilitado, false);
+            assert.equal(v.mercado_pago_ativo, false);
+            assert.equal(v.mercado_pago_access_token, '');
+            assert(
+              chamadas
+                .filter((a) => a[1] === 'get-secret-value')
+                .every((a) => a[a.indexOf('--secret-id') + 1] === secretArn)
+            );
+            assert(!chamadas.some((a) => JSON.stringify(a).includes('master_secret_arn')));
+          });
+          test('ativação remota comprova URL e ARN FIFO reais da OS', () => {
+            assert(
+              app.configuracao({ ...env, PROCESSAMENTO_REMOTO_ENABLED: 'true' }, aws).processamento_remoto_habilitado
+            );
+            for (const alterar of [
+              (r) => (r.Attributes.FifoQueue = 'false'),
+              (r) => (r.Attributes.QueueArn = 'arn:outro')
+            ])
+              assert.throws(() =>
+                app.configuracao({ ...env, PROCESSAMENTO_REMOTO_ENABLED: 'true' }, (...a) => {
+                  const r = aws(...a);
+                  if (r.Attributes) alterar(r);
+                  return r;
+                })
+              );
+            for (const flag of ['', 'TRUE', 'true ']) assert.throws(() => app.booleano(flag, 'teste'));
+          });
+          test('banco pendente, master, registry alheio e erros de acesso não geram fallback', () => {
+            for (const alterar of [
+              (r) => (r.Parameter.Value = 'bootstrap-pendente'),
+              (r) => (r.Parameter.Type = 'SecureString')
+            ])
+              assert.throws(() =>
+                app.configuracao(env, (...a) => {
+                  const r = aws(...a);
+                  if (a.includes(base + '/status/rds-orcamento-pagamento')) alterar(r);
+                  return r;
+                })
+              );
+            assert.throws(() =>
+              app.configuracao(env, (...a) => {
+                if (a[1] === 'get-secret-value')
+                  return {
+                    SecretString: JSON.stringify({ username: 'master', database: 'OficinaMecanicaDb', password: senha })
+                  };
+                return aws(...a);
+              })
+            );
+            assert.throws(() =>
+              app.configuracao(env, (...a) => {
+                const r = aws(...a);
+                if (r.repositories) r.repositories[0].registryId = '999999999999';
+                return r;
+              })
+            );
+            assert.throws(() =>
+              app.configuracao(env, () => {
+                throw Error('AccessDenied');
+              })
+            );
+          });
+          test('Mercado Pago não liga com configuração incompleta ou credenciais reaproveitadas', () => {
+            assert.throws(() => app.configuracao({ ...env, MERCADO_PAGO_ATIVO: 'true' }, aws));
+            const completo = {
+              ...env,
+              MERCADO_PAGO_ATIVO: 'true',
+              MERCADO_PAGO_ACCESS_TOKEN: 'TESTE-token',
+              MERCADO_PAGO_WEBHOOK_SECRET: 'assinatura-sintetica',
+              MERCADO_PAGO_RECEBEDOR_ID: '123',
+              MERCADO_PAGO_URL_NOTIFICACAO: 'https://teste.example.invalid/api/v1/pagamentos/notificacoes/mercado-pago'
+            };
+            assert(app.configuracao(completo, aws).mercado_pago_ativo);
+            for (const mudanca of [
+              { MERCADO_PAGO_WEBHOOK_SECRET: 'TESTE-token' },
+              { MERCADO_PAGO_URL_NOTIFICACAO: 'http://teste.example.invalid' },
+              { MERCADO_PAGO_URL_NOTIFICACAO: 'https://localhost/aviso' },
+              { MERCADO_PAGO_RECEBEDOR_ID: '0' }
+            ])
+              assert.throws(() => app.configuracao({ ...completo, ...mudanca }, aws));
+          });
+          test('state e plano não adotam namespaces ou recursos de outro owner', () => {
+            const recurso = {
+              mode: 'managed',
+              type: 'kubernetes_deployment_v1',
+              name: 'orcamento_pagamento',
+              instances: [{ attributes: { metadata: [{ name: app.nome, namespace: app.nome }] } }]
+            };
+            assert(app.validarRecurso(recurso, conta, regiao));
+            for (const mudar of [
+              (r) => (r.name = 'outra'),
+              (r) => (r.instances[0].attributes.metadata[0].namespace = 'oficina-mecanica'),
+              (r) => (r.module = 'module.outra')
+            ]) {
+              const r = structuredClone(recurso);
+              mudar(r);
+              assert.throws(() => app.validarRecurso(r, conta, regiao));
+            }
+            const r = { ...recurso, change: { after: recurso.instances[0].attributes, actions: ['create'] } };
+            assert(validarPlano(r, 'apply'));
+            assert.throws(() =>
+              validarPlano({ ...r, change: { ...r.change, actions: ['delete', 'create'] } }, 'apply')
+            );
+            assert.throws(() => validarPlano(r, 'destroy'));
+            assert.throws(() =>
+              app.validarRecurso(
+                { mode: 'data', type: 'aws_secretsmanager_secret_version', name: 'master' },
+                conta,
+                regiao
+              )
+            );
+          });
+          test('recuperação declarativa exige ausência comprovada de EKS e preserva state', () => {
+            const s = {
+              resources: [
+                {
+                  mode: 'data',
+                  type: 'aws_eks_cluster',
+                  name: 'aplicacao',
+                  instances: [{ attributes: { name: 'oficina-mecanica-eks-dev' } }]
+                },
+                { mode: 'managed', type: 'kubernetes_namespace_v1', name: 'orcamento_pagamento' }
+              ]
+            };
+            const original = JSON.stringify(s);
+            assert.equal(
+              destroy.destroyConfig(s, regiao, () => false),
+              null
+            );
+            assert.throws(() =>
+              destroy.destroyConfig(s, regiao, () => {
+                throw Error('AccessDenied');
+              })
+            );
+            assert(destroy.destroyConfig(s, regiao, () => undefined).includes('destroy = false'));
+            assert.equal(JSON.stringify(s), original);
+            for (const actions of [['create'], ['update'], ['delete', 'create']])
+              assert.throws(() =>
+                destroy.verifyPlan({ resource_changes: [{ address: 'teste', change: { actions } }] })
+              );
+          });
+          test('cifra autenticada não expõe segredo e rejeita alteração, outra chave e outro contexto', () => {
+            const key = crypto.randomBytes(32),
+              dados = Buffer.from('jwt-sintetico-e-conexao-sintetica');
+            const selado = protecao.selar(dados, key, 'conta|state');
+            assert(!selado.includes(dados.toString()));
+            assert.equal(protecao.abrir(selado, key, 'conta|state').toString(), dados.toString());
+            assert.notEqual(protecao.selar(dados, key, 'conta|state'), selado);
+            assert.throws(() => protecao.abrir(selado, crypto.randomBytes(32), 'conta|state'));
+            assert.throws(() => protecao.abrir(selado, key, 'outra-conta|state'));
+            const e = JSON.parse(selado);
+            e.tag = Buffer.alloc(16).toString('base64');
+            assert.throws(() => protecao.abrir(JSON.stringify(e), key, 'conta|state'));
+            for (const k of ['', 'a'.repeat(32), 'z'.repeat(64)]) assert.throws(() => protecao.chave(k));
+          });
+          test('cache parcial e plano completo fazem roundtrip sem publicar arquivos em claro', () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oficina-protecao-'));
+            const e = {
+              TF_WORKING_DIRECTORY: dir,
+              TERRAFORM_STATE_KEY: crypto.randomBytes(32).toString('hex'),
+              AWS_ACCOUNT_ID: conta,
+              SSM_ENVIRONMENT_NAME: 'development',
+              GITHUB_REPOSITORY: 'oficina-mecanica-soat/' + app.nome,
+              GITHUB_RUN_ID: '123',
+              GITHUB_RUN_ATTEMPT: '1',
+              GITHUB_SHA: 'a'.repeat(40)
+            };
+            try {
+              fs.writeFileSync(path.join(dir, 'terraform.tfstate'), 'state-sintetico-parcial');
+              protecao.main('state-seal', e);
+              assert.equal(fs.readFileSync(path.join(dir, 'terraform.tfstate'), 'utf8'), 'state-sintetico-parcial');
+              fs.unlinkSync(path.join(dir, 'terraform.tfstate'));
+              protecao.main('state-open', e);
+              assert.equal(fs.readFileSync(path.join(dir, 'terraform.tfstate'), 'utf8'), 'state-sintetico-parcial');
+              for (const [n, v] of Object.entries({
+                tfplan: 'plano-sintetico-sensivel',
+                'tfplan.sha256': 'hash',
+                'source-commit.txt': e.GITHUB_SHA,
+                'plan-context.json': '{}'
+              }))
+                fs.writeFileSync(path.join(dir, n), v);
+              protecao.main('plan-seal', e);
+              fs.unlinkSync(path.join(dir, 'tfplan'));
+              protecao.main('plan-open', e);
+              assert.equal(fs.readFileSync(path.join(dir, 'tfplan'), 'utf8'), 'plano-sintetico-sensivel');
+              assert.throws(() => protecao.main('plan-open', { ...e, GITHUB_RUN_ATTEMPT: '2' }));
+              assert.throws(() => protecao.main('plan-open', { ...e, AWS_ACCOUNT_ID: '999999999999' }));
+            } finally {
+              assert(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep + 'oficina-protecao-'));
+              fs.rmSync(dir, { recursive: true, force: true });
+            }
+          });
+          test('composição de destroy não consulta AWS nem credenciais SQL', () => {
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oficina-vars-destroy-'));
+            const old = cp.execFileSync;
+            let chamadas = 0;
+            cp.execFileSync = () => {
+              chamadas++;
+              throw Error('Consulta não autorizada no teste.');
+            };
+            const antigos = { ...process.env };
+            try {
+              process.env.TERRAFORM_ACTION = 'destroy';
+              process.env.TF_WORKING_DIRECTORY = dir;
+              delete process.env.GITHUB_OUTPUT;
+              app.main('vars');
+              assert.equal(chamadas, 0);
+              const v = JSON.parse(fs.readFileSync(path.join(dir, 'zz_ci.auto.tfvars.json'), 'utf8'));
+              assert.equal(v.aplicacao_habilitada, false);
+              assert.equal(v.db_connection_string, 'destroy-only');
+            } finally {
+              cp.execFileSync = old;
+              process.env = antigos;
+              fs.rmSync(dir, { recursive: true, force: true });
+            }
+          });
+
+          test('health real da esteira não publica ready depois de falha HTTP', () => {
+            const workflow = fs.readFileSync('.github/workflows/aws-deploy.yml', 'utf8').replace(/\r/g, '');
+            const bloco = workflow
+              .split('      - name: "🩺 05 · Validar health privado antes de liberar disponibilidade"')[1]
+              ?.split('        run: |\n')[1]
+              ?.split('\n      - name:')[0];
+            assert(bloco, 'Prova HTTP real ausente.');
+            const script = bloco
+              .split('\n')
+              .map((l) => l.slice(10))
+              .join('\n');
+            const mocks = `
+            exec 3>&2
+            kubectl() { return 0; }
+            curl() { return "$HEALTH_STATUS"; }
+            aws() { if [ "$2" = put-parameter ]; then printf READY_WRITE >&3; else printf ready; fi; }
+            `;
+            const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+            for (const status of ['0', '22']) {
+              const r = cp.spawnSync(bash, ['-s'], {
+                input: mocks + '\n' + script,
+                encoding: 'utf8',
+                env: { ...process.env, HEALTH_STATUS: status }
+              });
+              assert.equal(r.status === 0, status === '0');
+              assert.equal((r.stderr || '').includes('READY_WRITE'), status === '0');
+            }
+          });
+
+          test('corte exige workers e NodePort contratual', () => {
+            assert.equal(
+              app.configuracao({ ...env, PROCESSAMENTO_REMOTO_ENABLED: 'true', FLUXO_DISTRIBUIDO_ENABLED: 'true' }, aws)
+                .fluxo_distribuido_habilitado,
+              true
+            );
+            assert.throws(
+              () => app.configuracao({ ...env, FLUXO_DISTRIBUIDO_ENABLED: 'true' }, aws),
+              /workers habilitados/
+            );
+            const anterior = parametros['kubernetes/orcamento_pagamento_internal_node_port'];
+            parametros['kubernetes/orcamento_pagamento_internal_node_port'] = '30080';
+            try {
+              assert.throws(() => app.configuracao(env, aws), /NodePort/);
+            } finally {
+              parametros['kubernetes/orcamento_pagamento_internal_node_port'] = anterior;
+            }
+          });
+
+          TESTAR_APLICACAO
+          node --test "$RUNNER_TEMP/aplicacao-orcamento.test.cjs"
+
+      - name: "🛡️ Validar promoção cumulativa como na API"
+        run: |
+          node <<'TESTAR_PROMOCAO_CUMULATIVA'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const os = require('node:os');
+          const cp = require('node:child_process');
+          const assert = require('node:assert/strict');
+          const workflow = fs.readFileSync('.github/workflows/cd-development.yml', 'utf8');
+          const bloco = workflow.match(/node <<'VALIDAR_PROMOCAO_CUMULATIVA'\r?\n([\s\S]*?)          VALIDAR_PROMOCAO_CUMULATIVA/);
+          assert(bloco, 'Guarda cumulativa ausente.');
+          const codigo = bloco[1].split(/\r?\n/).map(l => l.slice(10)).join('\n');
+          const validar = new Function(codigo.split('// Execução no runner:')[0] + '; return validarPromocao;')();
+          const detector = workflow.match(/node <<'DETECTAR_DEPLOY'\r?\n([\s\S]*?)          DETECTAR_DEPLOY/)[1].split(/\r?\n/).map(l => l.slice(10)).join('\n');
+          const caminhos = JSON.parse(workflow.match(/DEPLOYABLE_PATHS: >-\r?\n((?:    [^\n]*\r?\n)+)/)[1]);
+          const diretorio = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP || os.tmpdir(), 'promocao-cumulativa-'));
+          try {
+            const git = args => cp.execFileSync('git', args, { cwd: diretorio, encoding: 'utf8' }).trim();
+            git(['init', '-b', 'develop']);
+            git(['config', 'user.email', 'teste@example.invalid']);
+            git(['config', 'user.name', 'Teste local']);
+            const gravar = (nome, conteudo) => {
+              fs.mkdirSync(path.dirname(path.join(diretorio, nome)), { recursive: true });
+              fs.writeFileSync(path.join(diretorio, nome), conteudo);
+              git(['add', nome]);
+              git(['commit', '-m', 'cenário local']);
+              return git(['rev-parse', 'HEAD']);
+            };
+            const base = gravar('README.md', 'base');
+            const docs = gravar('README.md', 'documentação');
+            const consultarNunca = () => { throw new Error('Consulta inesperada.'); };
+            const opcoes = { git, caminhos, base, head: docs, consultar: consultarNunca };
+            assert.equal(validar(opcoes), 'SEM_ALTERACAO_IMPLANTAVEL');
+
+            git(['switch', '-c', 'feature/teste']);
+            gravar('src/Exemplo.cs', 'código');
+            git(['switch', 'develop']);
+            git(['merge', '--no-ff', 'feature/teste', '-m', 'merge funcional']);
+            const implantavel = git(['rev-parse', 'HEAD']);
+            const head = gravar('README.md', 'documentação depois do código');
+            const detectar = (antes, atual) => {
+              const saida = path.join(diretorio, 'saida-runner.txt');
+              fs.writeFileSync(saida, '');
+              cp.execFileSync(process.execPath, ['-e', detector], {
+                cwd: diretorio,
+                env: { ...process.env, DEPLOYABLE_PATHS: JSON.stringify(caminhos), GITHUB_BEFORE: antes, GITHUB_SHA: atual, GITHUB_OUTPUT: saida }
+              });
+              return fs.readFileSync(saida, 'utf8').trim();
+            };
+            assert.equal(detectar(base, implantavel), 'deploy_required=true');
+            assert.equal(detectar(implantavel, head), 'deploy_required=false');
+            let chamadas = [];
+            const run = { id: 123, run_attempt: 2, head_sha: implantavel, head_branch: 'develop', event: 'push', status: 'completed', conclusion: 'success' };
+            const job = { name: '☁️ 02 · Deploy em development / ☁️ 04 · Aplicar ou destruir infraestrutura e aplicação', conclusion: 'success' };
+            const consultar = endpoint => {
+              chamadas.push(endpoint);
+              return endpoint.startsWith('actions/workflows/') ? [{ workflow_runs: [run] }] : [{ jobs: [job] }];
+            };
+            const comCodigo = { ...opcoes, head, consultar };
+            assert.throws(() => validar({ ...comCodigo, consultar: () => [{ workflow_runs: [] }] }), /sem CD/);
+            assert.equal(validar(comCodigo), 'OPERACAO_ANTERIOR_CONFIRMADA');
+            assert(chamadas[0].includes('head_sha=' + implantavel), 'Deve buscar o merge em develop, não o commit da feature/documentação.');
+            assert(chamadas[1].includes('/attempts/2/jobs'), 'Deve consultar a tentativa atual.');
+            for (const estado of ['skipped', 'failure', 'cancelled']) {
+              job.conclusion = estado;
+              assert.throws(() => validar(comCodigo), /sem aplicação/);
+            }
+            job.conclusion = 'success';
+            assert.throws(() => validar({ ...comCodigo, consultar: endpoint => endpoint.startsWith('actions/workflows/') ? [{ workflow_runs: [run] }] : [{}] }), /Jobs/);
+            assert.throws(() => validar({ ...comCodigo, consultar: endpoint => [{ workflow_runs: [{ ...run, head_sha: '0'.repeat(40) }] }] }), /sem CD/);
+            assert.throws(() => validar({ ...comCodigo, consultar: endpoint => [{ workflow_runs: [run, { ...run, id: 124, conclusion: 'failure' }] }] }), /sem CD/);
+            run.conclusion = 'failure';
+            assert.throws(() => validar(comCodigo), /sem CD/);
+            run.conclusion = 'success';
+            run.status = 'in_progress';
+            assert.throws(() => validar(comCodigo), /sem CD/);
+            run.status = 'completed';
+            assert.throws(() => validar({ ...comCodigo, consultar: consultarNunca }), /Consulta inesperada/);
+            assert.throws(() => validar({ ...comCodigo, consultar: () => ({}) }), /Histórico/);
+            assert.equal(validar({ ...comCodigo, consultar: consultarNunca, resultadoAtual: 'success', acaoAtual: 'apply' }), 'OPERACAO_ATUAL_CONFIRMADA');
+            assert.equal(validar({ ...comCodigo, consultar: consultarNunca, resultadoAtual: 'success', acaoAtual: 'destroy' }), 'OPERACAO_ATUAL_CONFIRMADA');
+            assert.throws(() => validar({ ...comCodigo, consultar: consultarNunca, resultadoAtual: 'skipped', acaoAtual: 'apply' }), /Consulta inesperada/);
+            gravar('src/Exemplo.cs', 'outro código ainda sem deploy');
+            const posterior = gravar('README.md', 'mais documentação');
+            assert.throws(() => validar({ ...comCodigo, head: posterior }), /sem CD/);
+            gravar('src/Exemplo.cs', 'código');
+            assert.equal(validar({ ...comCodigo, base: implantavel, head: git(['rev-parse', 'HEAD']), consultar: consultarNunca }), 'SEM_ALTERACAO_IMPLANTAVEL');
+            console.log('Promoção cumulativa: código sem deploy bloqueado; código implantado seguido de docs permitido; falhas, skips, reruns e novo código protegidos.');
+          } finally {
+            assert.equal(path.dirname(fs.realpathSync(diretorio)), fs.realpathSync(process.env.RUNNER_TEMP || os.tmpdir()));
+            fs.rmSync(diretorio, { recursive: true, force: true });
+          }
+          TESTAR_PROMOCAO_CUMULATIVA
+
+      - name: "🎨 04 · Verificar formatação Terraform"
+        run: terraform fmt -check -recursive infra/terraform
+
+      - name: "🚀 05 · Inicializar Terraform sem backend"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" init -backend=false -input=false
+
+      - name: "🔍 06 · Validar configuração Terraform"
+        run: terraform -chdir="$TF_WORKING_DIRECTORY" validate
+
+      - name: "🧪 07 · Validar planos com providers simulados"
+        run: |
+          terraform -chdir="$TF_WORKING_DIRECTORY" test -json -verbose > "$RUNNER_TEMP/terraform-planos-simulados.jsonl"
+          node <<'VALIDAR_PLANOS_REAIS'
+          const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+          const h=require(path.join(process.env.RUNNER_TEMP,'mensageria-orcamento.cjs'));
+          const linhas=fs.readFileSync(path.join(process.env.RUNNER_TEMP,'terraform-planos-simulados.jsonl'),'utf8').trim().split(/\r?\n/).map(JSON.parse);
+          assert(linhas.some(l=>l.type==='test_summary'&&l.test_summary.status==='pass'));
+          process.env.AWS_ACCOUNT_ID='123456789012';process.env.AWS_REGION='us-east-1';
+          let planos=0;
+          for(const l of linhas.filter(l=>l.type==='test_plan')) {
+            const p={...l.test_plan,format_version:l.test_plan.plan_format_version,planned_values:{}};
+            if(l['@testrun']==='ambiente_parametriza_nomes_e_contratos')assert.throws(()=>h.validarPlano(p,'apply','homologation'));
+            else {h.validarPlano(p,'apply','development');planos++;}
+          }
+          assert.equal(planos,9);
+          console.log('Dez planos simulados aprovados; nove planos development passam pelo guardrail real e homologation permanece bloqueada.');
+          VALIDAR_PLANOS_REAIS
+
+  quality_gate:
+    name: "🚦 06 · Quality gate"
+    runs-on: ubuntu-latest
+    needs:
+      - detect_ci_scope
+      - validate_git_flow
+      - build_application
+      - verify_code_style
+      - test_application
+      - build_container_image
+      - validate_terraform
+    if: always()
+
+    steps:
+      - name: "🚦 01 · Conferir status de todos os jobs do CI"
+        run: |
+          if [ "${{ needs.detect_ci_scope.result }}" != "success" ]; then
+            echo "A detecção de escopo da CI falhou."
+            exit 1
+          fi
+
+          if [ "${{ needs.validate_git_flow.result }}" != "success" ]; then
+            echo "A validação de branches do Git Flow falhou."
+            exit 1
+          fi
+
+          if [ "${{ needs.detect_ci_scope.outputs.ci_required }}" != "true" ]; then
+            echo "Somente documentação ou Markdown alterados. Etapas de aplicação dispensadas."
+            exit 0
+          fi
+
+          results=(
+            "${{ needs.build_application.result }}"
+            "${{ needs.verify_code_style.result }}"
+            "${{ needs.test_application.result }}"
+            "${{ needs.build_container_image.result }}"
+            "${{ needs.validate_terraform.result }}"
+          )
+
+          for result in "${results[@]}"; do
+            if [ "$result" != "success" ]; then
+              echo "Uma ou mais responsabilidades da CI falharam."
+              exit 1
+            fi
+          done
+
+          echo "Todas as responsabilidades da CI passaram."

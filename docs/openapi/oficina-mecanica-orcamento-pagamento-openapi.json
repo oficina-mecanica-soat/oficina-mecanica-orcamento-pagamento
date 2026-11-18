@@ -1,0 +1,1240 @@
+{
+  "openapi": "3.0.4",
+  "info": {
+    "title": "OficinaMecanica.OrcamentoPagamento.API",
+    "version": "1.0"
+  },
+  "paths": {
+    "/api/v1/orcamentos": {
+      "post": {
+        "tags": [
+          "Orcamentos"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GerarOrcamentoRequest"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GerarOrcamentoRequest"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/GerarOrcamentoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Operação executada com sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Acesso proibido para o perfil informado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Acesso proibido para o perfil informado.",
+                  "tipo": "AcessoProibido"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/orcamentos/{orcamentoId}": {
+      "get": {
+        "tags": [
+          "Orcamentos"
+        ],
+        "parameters": [
+          {
+            "name": "orcamentoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operação executada com sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Acesso proibido para o perfil informado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Acesso proibido para o perfil informado.",
+                  "tipo": "AcessoProibido"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/orcamentos/{orcamentoId}/decisao": {
+      "post": {
+        "tags": [
+          "Orcamentos"
+        ],
+        "parameters": [
+          {
+            "name": "orcamentoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisaoOrcamentoBody"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisaoOrcamentoBody"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisaoOrcamentoBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Operação executada com sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Acesso proibido para o perfil informado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Acesso proibido para o perfil informado.",
+                  "tipo": "AcessoProibido"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/orcamentos/{orcamentoId}/cancelar": {
+      "post": {
+        "tags": [
+          "Orcamentos"
+        ],
+        "parameters": [
+          {
+            "name": "orcamentoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelarOrcamentoBody"
+              }
+            },
+            "text/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelarOrcamentoBody"
+              }
+            },
+            "application/*+json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelarOrcamentoBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              },
+              "text/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Operação executada com sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrcamentoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Acesso proibido para o perfil informado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Acesso proibido para o perfil informado.",
+                  "tipo": "AcessoProibido"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/pagamentos/{pagamentoId}": {
+      "get": {
+        "tags": [
+          "Pagamentos"
+        ],
+        "parameters": [
+          {
+            "name": "pagamentoId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operação executada com sucesso.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagamentoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Acesso proibido para o perfil informado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Acesso proibido para o perfil informado.",
+                  "tipo": "AcessoProibido"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/pagamentos/notificacoes/mercado-pago": {
+      "post": {
+        "tags": [
+          "Pagamentos"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { }
+            },
+            "text/json": {
+              "schema": { }
+            },
+            "application/*+json": {
+              "schema": { }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Operação executada com sucesso."
+          },
+          "400": {
+            "description": "Requisição inválida.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Requisição inválida.",
+                  "tipo": "Validacao",
+                  "erros": [
+                    "Requisição inválida."
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Não autorizado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Não autorizado.",
+                  "tipo": "NaoAutorizado"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Recurso não encontrado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Recurso não encontrado.",
+                  "tipo": "NaoEncontrado"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Regra de negócio violada.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Regra de negócio violada.",
+                  "tipo": "RegraNegocio"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Conflito ao salvar o recurso. Recarregue os dados e tente novamente.",
+                  "tipo": "Conflito"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Erro interno inesperado.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "mensagem": "Erro interno inesperado.",
+                  "tipo": "ErroInterno"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CancelarOrcamentoBody": {
+        "type": "object",
+        "properties": {
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "operacaoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "motivo": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ContextoIntegracao": {
+        "type": "object",
+        "properties": {
+          "sagaId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "correlationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "mensagemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "traceContext": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "DecisaoOrcamento": {
+        "enum": [
+          "Aprovado",
+          "Recusado"
+        ],
+        "type": "string"
+      },
+      "DecisaoOrcamentoBody": {
+        "type": "object",
+        "properties": {
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "decisao": {
+            "$ref": "#/components/schemas/DecisaoOrcamento"
+          },
+          "operacaoId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "mensagem": {
+            "type": "string",
+            "nullable": true
+          },
+          "tipo": {
+            "$ref": "#/components/schemas/TipoErro"
+          },
+          "erros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "GerarOrcamentoRequest": {
+        "type": "object",
+        "properties": {
+          "ordemServicoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clienteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "contexto": {
+            "$ref": "#/components/schemas/ContextoIntegracao"
+          },
+          "servicos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServicoOrcamentoRequest"
+            },
+            "nullable": true
+          },
+          "pecasInsumos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PecaInsumoOrcamentoRequest"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrcamentoResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ordemServicoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clienteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "decisao": {
+            "type": "string",
+            "nullable": true
+          },
+          "valorTotal": {
+            "type": "number",
+            "format": "double"
+          },
+          "servicos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServicoOrcamentoResponse"
+            },
+            "nullable": true
+          },
+          "pecasInsumos": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PecaInsumoOrcamentoResponse"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "PagamentoResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ordemServicoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orcamentoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clienteId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "versao": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "valor": {
+            "type": "number",
+            "format": "double"
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "enderecoCheckout": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "PecaInsumoOrcamentoRequest": {
+        "type": "object",
+        "properties": {
+          "pecaInsumoCatalogoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "quantidade": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "valorUnitario": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PecaInsumoOrcamentoResponse": {
+        "type": "object",
+        "properties": {
+          "pecaInsumoCatalogoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "quantidade": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "valorUnitario": {
+            "type": "number",
+            "format": "double"
+          },
+          "valorTotal": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServicoOrcamentoRequest": {
+        "type": "object",
+        "properties": {
+          "servicoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "servicoCatalogoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "valor": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ServicoOrcamentoResponse": {
+        "type": "object",
+        "properties": {
+          "servicoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "servicoCatalogoId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "descricao": {
+            "type": "string",
+            "nullable": true
+          },
+          "valor": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TipoErro": {
+        "enum": [
+          "Validacao",
+          "NaoEncontrado",
+          "RegraNegocio",
+          "NaoAutorizado",
+          "ErroInterno",
+          "AcessoProibido",
+          "Conflito",
+          "Indisponivel"
+        ],
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "Bearer": {
+        "type": "http",
+        "description": "Cole apenas o token JWT emitido pelo serviço de autenticação.",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Orcamentos"
+    },
+    {
+      "name": "Pagamentos"
+    }
+  ]
+}

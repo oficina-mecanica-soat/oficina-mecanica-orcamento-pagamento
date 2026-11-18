@@ -28,3 +28,14 @@ override.tf.json
 
 # Contexto temporário da verificação de destroy de mensageria
 **/os-mensageria-destroy-context.json
+
+# Artefatos temporários da esteira de mensageria
+**/mensageria-destroy-context.json
+**/plan-context.json
+**/source-commit.txt
+**/tfplan
+**/tfplan.sha256
+
+# Pacotes e contexto temporários da aplicação
+**/tfplan.bundle.enc
+**/aplicacao-destroy-context.json

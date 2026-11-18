@@ -1,0 +1,12 @@
+**/.git
+**/.github
+**/.vs
+**/bin
+**/obj
+**/TestResults
+**/*.user
+**/*.suo
+**/*.cache
+**/.env
+README.md
+.env*
