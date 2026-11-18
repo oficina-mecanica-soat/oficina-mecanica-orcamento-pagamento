@@ -1,12 +1,16 @@
-# Oficina Mecânica — Orçamento e Pagamento
+# 💳 Oficina Mecânica — Orçamento e Pagamento
 
 Microsserviço de orçamento, decisão do cliente, cobrança e confirmação financeira. Mantém banco SQL Server, login, migrations, fila e workload próprios. OS coordena a Saga; Execução mantém o trabalho físico.
 
-## Arquitetura
+<a id="arquitetura"></a>
+
+## 🏗️ Arquitetura
 
 Clean Architecture separa Domain, Application, Infrastructure e API. Snapshots preservam preços e quantidades da versão aprovada. Transação SQL confirma estado, Inbox e Outbox; `rowversion` e restrições únicas protegem concorrência e duplicatas. A integração Mercado Pago fica na Infrastructure e não acopla o Domain ao provedor.
 
-## Executar localmente
+<a id="executar-localmente"></a>
+
+## 🚀 Executar localmente
 
 Pré-requisitos: Docker com containers Linux; .NET SDK 10 para execução dos testes fora do container.
 
@@ -28,7 +32,9 @@ docker compose down
 
 Esse comando preserva o volume de dados local. Não use remoção de volumes se quiser conservar seus orçamentos.
 
-## Adaptador Mercado Pago
+<a id="adaptador-mercado-pago"></a>
+
+## 💳 Adaptador Mercado Pago
 
 A integração externa usa um `HttpClient` tipado na Infrastructure e contratos próprios na Application. DTOs e nomes da API Mercado Pago permanecem na Infrastructure. O Domain não depende do provedor.
 
@@ -48,7 +54,9 @@ O validador HMAC autentica assinatura, requisição e identificador do recurso c
 
 Essa configuração compõe os adaptadores; as rotas de consulta e Webhook são descritas abaixo. A confirmação depende da consulta e validação do estado no provedor. Referências: [preferências](https://www.mercadopago.com.br/developers/pt/reference/online-payments/checkout-pro-preferences/overview) e [notificações](https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-preferences/payment-notifications).
 
-## Contrato HTTP local
+<a id="contrato-http-local"></a>
+
+## 📡 Contrato HTTP local
 
 Todas as rotas abaixo exigem JWT válido; este serviço não emite tokens. Defaults compartilhados: issuer `oficina-mecanica-auth` e audience `oficina-mecanica-api`, configuráveis em `Jwt`.
 
@@ -63,7 +71,9 @@ Cliente é limitado ao próprio `cliente_id` do JWT. Identificador ausente/invá
 
 Decisão: `{"versao":1,"decisao":1,"operacaoId":"UUID"}`; `1` aprova e `2` recusa. No modo distribuído, geração e cancelamento são coordenados pela Saga; não usar as rotas administrativas para contornar esse fluxo.
 
-## Pagamentos
+<a id="pagamentos"></a>
+
+## 💳 Pagamentos
 
 A cobrança é solicitada internamente pelo comando `CriarCobranca`, após a finalização física confirmada pela Saga de OS. O valor e o cliente são obtidos do orçamento aprovado no banco deste serviço. Não existe endpoint público para criar cobranças.
 
@@ -76,7 +86,9 @@ A intenção de cobrança é confirmada no SQL antes do POST externo. A referên
 
 Somente a aprovação confirmada pelo provedor gera `PagamentoConfirmado` junto da alteração local, via Outbox. Recusa não impede outra tentativa aprovada; eventos atrasados não regridem a confirmação. Estorno, contestação e estados desconhecidos exigem conciliação manual. Um orçamento com cobrança solicitada não pode ser compensado por cancelamento.
 
-## Processamento de mensagens
+<a id="processamento-de-mensagens"></a>
+
+## 📨 Processamento de mensagens
 
 `ProcessamentoRemoto:Habilitado` é `false` por padrão. Nesse modo, o host não cria clientes AWS nem inicia workers. Os processadores continuam disponíveis para testes e composição local por arquivos.
 
@@ -86,7 +98,9 @@ O consumidor usa long polling de 20 segundos, uma mensagem por vez e visibilidad
 
 O publicador trabalha em um loop separado, para que a espera do consumidor não impeça o envio da Outbox. As tentativas preservam `mensagemId` e o agrupamento por OS. O SDK usa timeout de 30 segundos e não repete requisições internamente; Inbox/Outbox e o worker controlam a recuperação. Os testes com SDK substituído e SQL real não comprovam FIFO/DLQ/IAM ou entrega em AWS.
 
-## Validar
+<a id="validar"></a>
+
+## 🧪 Validar
 
 Na [CI de referência do código entregue](https://github.com/oficina-mecanica-soat/oficina-mecanica-orcamento-pagamento/actions/runs/43952148323), foram aprovados **305 testes**, sem falhas ou ignorados, com **94,04% de cobertura global de linhas** (2.100 de 2.233 linhas). Os relatórios estão no artefato `test-and-coverage-results`. O gate exige 90%; uma CI somente documental não representa nova medição.
 
@@ -103,7 +117,9 @@ dotnet format OficinaMecanica.OrcamentoPagamento.sln --verify-no-changes --no-re
 
 Os testes de integração exigem Docker e criam SQL Server descartável com Testcontainers. Validam migrations, persistência real, rollback da transação, concorrência, idempotência, JWT, permissões e restrição por cliente. Não precisam de AWS nem de credenciais reais.
 
-## Configuração de development
+<a id="configuração-de-development"></a>
+
+## ⚙️ Configuração de development
 
 | Configuração do Environment development | Uso |
 | --- | --- |
@@ -121,7 +137,9 @@ A primeira implantação mantém Mercado Pago desligado. Após existir a URL pú
 
 Logs HTTP usam a mesma convenção dos demais serviços. Outbox propaga o `traceparent` validado, e logs incluem os IDs de correlação. Consulte a [RFC-0006 de observabilidade](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/architecture/rfcs/rfc-0006-observabilidade-centralizada-com-datadog.md).
 
-## Operação e documentação
+<a id="operação-e-documentação"></a>
+
+## 🧭 Operação e documentação
 
 - [Visão geral, arquitetura e ordem das esteiras](https://github.com/oficina-mecanica-soat/oficina-mecanica-api#deploy-aws).
 - [Configuração, primeira aplicação e recuperação após Reset](https://github.com/oficina-mecanica-soat/oficina-mecanica-api/blob/develop/docs/deploy/deploy-aws.md).
