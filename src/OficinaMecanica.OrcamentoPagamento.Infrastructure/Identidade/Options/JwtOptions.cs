@@ -1,0 +1,45 @@
+using System.Text;
+
+namespace OficinaMecanica.OrcamentoPagamento.Infrastructure.Identidade.Options;
+
+public sealed class JwtOptions
+{
+    public const string SectionName = "Jwt";
+
+    public string Issuer { get; init; } = string.Empty;
+    public string Audience { get; init; } = string.Empty;
+    public string Secret { get; init; } = string.Empty;
+    public int ExpirationMinutes { get; init; } = 60;
+
+    public bool EhValido()
+    {
+        return !string.IsNullOrWhiteSpace(Issuer)
+            && !string.IsNullOrWhiteSpace(Audience)
+            && !string.IsNullOrWhiteSpace(Secret)
+            && Encoding.UTF8.GetByteCount(Secret) >= 32
+            && ExpirationMinutes > 0;
+    }
+
+    public void Validar()
+    {
+        if (string.IsNullOrWhiteSpace(Issuer))
+        {
+            throw new InvalidOperationException("Jwt:Issuer não configurado.");
+        }
+
+        if (string.IsNullOrWhiteSpace(Audience))
+        {
+            throw new InvalidOperationException("Jwt:Audience não configurado.");
+        }
+
+        if (string.IsNullOrWhiteSpace(Secret))
+        {
+            throw new InvalidOperationException("Jwt:Secret não configurado.");
+        }
+
+        if (Encoding.UTF8.GetByteCount(Secret) < 32)
+        {
+            throw new InvalidOperationException("Jwt:Secret deve ter pelo menos 32 bytes UTF-8.");
+        }
+    }
+}
