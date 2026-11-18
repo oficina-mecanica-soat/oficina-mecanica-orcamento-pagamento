@@ -2,6 +2,17 @@
 
 Microsserviço de orçamento, decisão do cliente, cobrança e confirmação financeira. Mantém banco SQL Server, login, migrations, fila e workload próprios. OS coordena a Saga; Execução mantém o trabalho físico.
 
+## 🏗️ Recursos provisionados por esta esteira
+
+| Recurso próprio | Uso e integração |
+| --- | --- |
+| Namespace, Deployment, ConfigMap, Secret, Service NodePort 30082 e HPA | Workload de Orçamento/Pagamento no EKS compartilhado; imagem publicada no ECR próprio já criado pela plataforma |
+| Entrada SQS FIFO, DLQ e política de redrive | Comandos da Saga de OS; os resultados voltam pela fila de OS |
+| Parâmetros SSM de filas, modo distribuído e prontidão do workload | Publicar contratos consumidos pela API e pelo Gateway |
+| Migrations do banco próprio | Criar/evoluir schemas e tabelas de orçamento, cobrança, Inbox/Outbox no startup configurado |
+
+A [esteira RDS](https://github.com/oficina-mecanica-soat/oficina-mecanica-infra-rds) cria/prepara instância, banco lógico, login e secret de conexão; este repositório consome a credencial exclusiva. EKS, ECR e listener 8082 são da plataforma Kubernetes; rotas públicas e URL do Webhook são do Gateway. A configuração no painel Mercado Pago pertence à aplicação vendedora de teste, não é um recurso provisionado pelo Terraform. Fonte: [`infra/terraform/environments/dev`](infra/terraform/environments/dev).
+
 <a id="arquitetura"></a>
 
 ## 🏗️ Arquitetura
